@@ -1,0 +1,8 @@
+name = "lecture-live-translator"
+compatibility_date = "2025-01-01"
+pages_build_output_dir = "public"
+
+# 可选环境变量说明（在 Cloudflare Pages 后台 Settings -> Environment variables 中配置）：
+# GEMINI_API_KEY = "AIzaSy..."         # 若在 Cloudflare 后台配置，网页端可免填 Key 直接调用
+# ACCESS_PASSCODE = "optional_secret"  # 可选：若配置了服务端 Key，可设置访问口令防止他人盗刷
+

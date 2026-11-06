@@ -1,0 +1,19 @@
+{
+  "name": "lecture-live-translator",
+  "version": "1.0.0",
+  "description": "留学课堂实时同传助手 - Web Speech API + Gemini 2.5 Flash (Cloudflare Pages Ready)",
+  "private": true,
+  "scripts": {
+    "dev": "npx wrangler pages dev public --port 8788",
+    "serve": "python3 -m http.server 8080 --directory public",
+    "deploy": "npx wrangler pages deploy public --project-name lecture-live-translator"
+  },
+  "keywords": [
+    "simultaneous-interpretation",
+    "gemini-2.5-flash",
+    "web-speech-api",
+    "cloudflare-pages",
+    "study-abroad"
+  ]
+}
+

@@ -316,15 +316,20 @@ export class APIHealthMonitor {
         const data = await res.json();
         if (data && data.edge?.active) {
           const latency = data.upstream?.latencyMs || Date.now() - startTime;
+          const envLabel =
+            data.serverConfig?.label || "Cloudflare 边缘同传节点";
           this.updateEdge({
             checked: true,
             active: true,
+            hasCustomEnvApi: Boolean(data.serverConfig?.hasCustomEnvApi),
             colo: data.edge.colo || "CF-EDGE",
-            modeLabel: `Cloudflare 边缘同传节点 (${data.edge.colo || "GLOBAL"}) · 免密已激活`
+            modeLabel: `${envLabel} · 节点 ${data.edge.colo || "GLOBAL"}`
           });
           this.updateTranslation({
             status: "healthy",
-            statusText: `在线就绪 (${latency}ms)`,
+            statusText: `${
+              data.serverConfig?.hasCustomEnvApi ? data.serverConfig.provider.toUpperCase() : "在线就绪"
+            } (${latency}ms)`,
             lastLatencyMs: latency,
             lastCheckedAt: new Date().toLocaleTimeString(),
             lastError: ""
@@ -628,7 +633,13 @@ function normalizeShortLang(langCode = "ru-RU") {
   return raw.split("-")[0].toLowerCase() || "ru";
 }
 
-async function fetchZeroConfigTranslation(text, sourceLang = "ru-RU", targetLang = "zh-CN", mode = "standard") {
+async function fetchZeroConfigTranslation(
+  text,
+  sourceLang = "ru-RU",
+  targetLang = "zh-CN",
+  mode = "standard",
+  extraMeta = {}
+) {
   const cleanText = String(text || "").trim();
   if (!cleanText) {
     return { translation: "", terms: [], latencyMs: 0 };
@@ -636,14 +647,59 @@ async function fetchZeroConfigTranslation(text, sourceLang = "ru-RU", targetLang
 
   const sl = normalizeShortLang(sourceLang);
   const tl = normalizeShortLang(targetLang);
-  const cacheKey = `${sl}:${tl}:${cleanText}`;
+  const cacheKey = `${mode}:${sl}:${tl}:${cleanText}`;
   if (liveTranslationCache.has(cacheKey)) {
     return { ...liveTranslationCache.get(cacheKey), cached: true };
   }
 
   const startTime = Date.now();
 
-  // 1. 优先尝试 Google GTX 极速神经翻译接口（延迟最低 ~100-200ms，完美支持俄语/英语实时流）
+  // 1. 整句精翻模式 (standard) 优先请求 Cloudflare `/api/translate` 边缘接口，以使用后台「变量和密钥」环境变量配置的 API 选项
+  if (mode === "standard") {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 6500);
+      const res = await fetch("/api/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: cleanText,
+          sourceLang,
+          targetLang,
+          courseSubject: extraMeta.courseSubject || "",
+          glossaryKeywords: extraMeta.glossaryKeywords || "",
+          mode
+        }),
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+
+      if (res.ok) {
+        const data = await res.json();
+        const parsed = parseStructuredTranslation(
+          data.text || data.translation || ""
+        );
+        const finalTrans = data.translation || parsed.translation;
+        if (finalTrans) {
+          const result = {
+            translation: finalTrans,
+            correctedSource: parsed.correctedSource || "",
+            terms:
+              Array.isArray(data.terms) && data.terms.length > 0
+                ? data.terms
+                : parsed.terms,
+            latencyMs: data.latencyMs || Date.now() - startTime
+          };
+          liveTranslationCache.set(cacheKey, result);
+          return result;
+        }
+      }
+    } catch (_) {
+      // 若本地静态运行无 /api/translate 则自动向下走直连通道
+    }
+  }
+
+  // 2. 极速流式预览 (fast-stream) 或纯静态环境：调用 Google GTX 极速神经翻译接口
   try {
     const gtxUrl =
       `https://translate.googleapis.com/translate_a/single?client=gtx` +
@@ -683,45 +739,6 @@ async function fetchZeroConfigTranslation(text, sourceLang = "ru-RU", targetLang
           const firstKey = liveTranslationCache.keys().next().value;
           liveTranslationCache.delete(firstKey);
         }
-        liveTranslationCache.set(cacheKey, result);
-        return result;
-      }
-    }
-  } catch (_) {
-    // 浏览器直连受阻时自动走 Cloudflare Pages 边缘代理
-  }
-
-  // 2. 尝试经由 Cloudflare Pages `/api/translate` 边缘函数翻译
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 4500);
-    const res = await fetch("/api/translate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        text: cleanText,
-        sourceLang,
-        targetLang,
-        mode
-      }),
-      signal: controller.signal
-    });
-    clearTimeout(timer);
-
-    if (res.ok) {
-      const data = await res.json();
-      const parsed = parseStructuredTranslation(data.text || data.translation || "");
-      const finalTrans = data.translation || parsed.translation;
-      if (finalTrans) {
-        const result = {
-          translation: finalTrans,
-          correctedSource: parsed.correctedSource || "",
-          terms:
-            Array.isArray(data.terms) && data.terms.length > 0
-              ? data.terms
-              : parsed.terms,
-          latencyMs: data.latencyMs || Date.now() - startTime
-        };
         liveTranslationCache.set(cacheKey, result);
         return result;
       }
@@ -782,6 +799,7 @@ export async function translateLiveInterimText({
  */
 export async function translateLectureSegment({
   text,
+  courseSubject = "通用大学学术课堂",
   glossaryKeywords = "",
   sourceLang = "ru-RU",
   targetLang = "简体中文",
@@ -797,7 +815,8 @@ export async function translateLectureSegment({
       text,
       sourceLang,
       targetLang,
-      "standard"
+      "standard",
+      { courseSubject, glossaryKeywords }
     );
 
     const latencyMs = res.latencyMs || Date.now() - startTime;

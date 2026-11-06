@@ -547,6 +547,7 @@ class LectureTranslatorApp {
 
     const result = await translateLectureSegment({
       text: cleanSource,
+      courseSubject: this.settings.courseSubject,
       glossaryKeywords: this.settings.glossaryKeywords,
       sourceLang: usedSourceLang,
       targetLang: this.settings.targetLang,
@@ -596,6 +597,7 @@ class LectureTranslatorApp {
 
     const result = await translateLectureSegment({
       text: targetItem.source,
+      courseSubject: this.settings.courseSubject,
       glossaryKeywords: this.settings.glossaryKeywords,
       sourceLang: targetItem.sourceLang || this.settings.sourceLang,
       targetLang: this.settings.targetLang,

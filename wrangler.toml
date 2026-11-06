@@ -2,5 +2,20 @@ name = "lecture-live-translator"
 compatibility_date = "2025-01-01"
 pages_build_output_dir = "public"
 
-# 说明：本项目已内置免密多通道实时神经翻译引擎（支持俄语 ru-RU、英语 en-US 等多语种实时双语对照）
-# 部署到 Cloudflare Pages / Workers 时【无需】在后台「变量和密钥 (Variables and Secrets)」中添加任何环境变量或 API 密钥，部署完成即可直接使用！
+# ==============================================================================
+# 环境变量 API 选项说明（可在 Cloudflare 后台「设置 -> 变量和密钥 (Variables and Secrets)」中添加）
+# 前台网页不显示任何 API 添加接口，所有 API 均通过以下后端环境变量自动读取与切换：
+# ==============================================================================
+#
+# 【方式一：通用环境变量配置（最简单，填入任意一家 API Key 自动识别）】
+# API_KEY       = "你的密钥"            # 自动识别 AIza...(Gemini) / id.secret(智谱GLM) / sk-...(SiliconFlow/DeepSeek/OpenAI)
+# API_PROVIDER  = "gemini"              # 可选：gemini | glm | siliconflow | deepseek | openai | custom | free
+# API_MODEL     = "gemini-2.5-flash"    # 可选：自定义模型名称（如 glm-4-flash, Qwen/Qwen2.5-7B-Instruct, deepseek-chat）
+# API_BASE_URL  = ""                    # 可选：自定义 API 代理或第三方 OpenAI 兼容接口地址
+#
+# 【方式二：按服务商专属变量名配置】
+# GEMINI_API_KEY      = "AIzaSy..."     # Google Gemini API 密钥
+# GLM_API_KEY         = "xxx.xxx"       # 智谱 GLM-4-Flash 免费 API 密钥
+# SILICONFLOW_API_KEY = "sk-..."        # 硅基流动 Qwen2.5 免费 API 密钥
+# DEEPSEEK_API_KEY    = "sk-..."        # DeepSeek API 密钥
+# OPENAI_API_KEY      = "sk-..."        # OpenAI 或兼容接口密钥

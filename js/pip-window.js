@@ -90,39 +90,38 @@ export class FloatingSubtitlePiP {
           cursor: pointer;
         }
         .pip-btn:hover { background: rgba(71, 85, 105, 0.9); }
-        .pip-grid {
+        .pip-flow-box {
           flex: 1;
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 8px;
-          padding: 8px 10px;
-          min-height: 0;
-          font-size: var(--pip-font-size, 15px);
-        }
-        .pip-col {
-          background: rgba(17, 24, 39, 0.85);
-          border: 1px solid rgba(148, 163, 184, 0.16);
-          border-radius: 7px;
-          padding: 8px 10px;
+          margin: 8px 10px;
+          background: rgba(17, 24, 39, 0.88);
+          border: 1px solid rgba(148, 163, 184, 0.18);
+          border-top: 2px solid #38bdf8;
+          border-radius: 8px;
+          padding: 10px 12px;
           overflow-y: auto;
+          font-size: var(--pip-font-size, 15px);
           line-height: 1.6;
         }
-        .pip-col.orig-col {
-          border-top: 2px solid #38bdf8;
+        .pip-utterance {
+          padding: 6px 0;
+          border-bottom: 1px dashed rgba(148, 163, 184, 0.14);
+        }
+        .pip-utterance:last-child {
+          border-bottom: none;
+        }
+        .pip-orig {
           color: #cbd5e1;
+          margin-bottom: 2px;
         }
-        .pip-col.zh-col {
-          border-top: 2px solid #10b981;
+        .pip-zh {
           color: #f8fafc;
-          font-weight: 500;
+          font-weight: 600;
         }
-        .pip-live-inline {
+        .pip-live .pip-orig {
           color: #38bdf8;
-          border-bottom: 1px dashed rgba(56, 189, 248, 0.6);
         }
-        .pip-live-inline-zh {
+        .pip-live .pip-zh {
           color: #34d399;
-          border-bottom: 1px dashed rgba(52, 211, 153, 0.6);
         }
       </style>
     `;
@@ -131,7 +130,7 @@ export class FloatingSubtitlePiP {
       <div class="pip-header">
         <div class="pip-status">
           <span id="pip-dot" class="dot"></span>
-          <span id="pip-status-text">整堂课连续双语同传运行中</span>
+          <span id="pip-status-text">整堂课单框双语同传运行中</span>
         </div>
         <div class="pip-actions">
           <button id="pip-font-dec" class="pip-btn" title="缩小字号">A-</button>
@@ -139,23 +138,22 @@ export class FloatingSubtitlePiP {
           <button id="pip-toggle-btn" class="pip-btn">暂停/继续</button>
         </div>
       </div>
-      <div id="pip-grid" class="pip-grid">
-        <div id="pip-orig-col" class="pip-col orig-col">等待老师开始讲课...</div>
-        <div id="pip-zh-col" class="pip-col zh-col">说话时此处将连续显示整堂课中文翻译对照...</div>
+      <div id="pip-flow-box" class="pip-flow-box">
+        等待老师开始讲课，每一段话的双语对照将在此同一输出框内连续生成...
       </div>
     `;
 
     doc.getElementById("pip-font-dec").addEventListener("click", () => {
       this.fontSize = Math.max(12, this.fontSize - 2);
       doc
-        .getElementById("pip-grid")
+        .getElementById("pip-flow-box")
         .style.setProperty("--pip-font-size", `${this.fontSize}px`);
     });
 
     doc.getElementById("pip-font-inc").addEventListener("click", () => {
       this.fontSize = Math.min(26, this.fontSize + 2);
       doc
-        .getElementById("pip-grid")
+        .getElementById("pip-flow-box")
         .style.setProperty("--pip-font-size", `${this.fontSize}px`);
     });
 
@@ -185,8 +183,7 @@ export class FloatingSubtitlePiP {
 
     const dotEl = doc.getElementById("pip-dot");
     const statusEl = doc.getElementById("pip-status-text");
-    const origCol = doc.getElementById("pip-orig-col");
-    const zhCol = doc.getElementById("pip-zh-col");
+    const flowBox = doc.getElementById("pip-flow-box");
 
     if (dotEl) {
       dotEl.className = `dot ${hasError ? "error" : isListening ? "" : "paused"}`;
@@ -195,34 +192,39 @@ export class FloatingSubtitlePiP {
       statusEl.textContent = statusText;
     }
 
-    if (origCol && zhCol) {
-      const origHistory = recentItems
-        .map((i) => this.escapeHtml(i.correctedSource || i.source || ""))
-        .join(" ");
-      const zhHistory = recentItems
-        .map((i) => this.escapeHtml(i.translation || ""))
-        .join(" ");
+    if (flowBox) {
+      const historyHtml = recentItems
+        .map(
+          (i) => `
+          <div class="pip-utterance">
+            <div class="pip-orig">${this.escapeHtml(
+              i.correctedSource || i.source || ""
+            )}</div>
+            <div class="pip-zh">${this.escapeHtml(
+              i.translation || "正在同步翻译..."
+            )}</div>
+          </div>
+        `
+        )
+        .join("");
 
-      const liveOrigHtml = liveInterim
-        ? ` <span class="pip-live-inline">${this.escapeHtml(liveInterim)}</span>`
+      const liveHtml = liveInterim
+        ? `
+          <div class="pip-utterance pip-live">
+            <div class="pip-orig">${this.escapeHtml(liveInterim)}</div>
+            <div class="pip-zh">${this.escapeHtml(
+              liveInterimTranslation || "正在同步翻译..."
+            )}</div>
+          </div>
+        `
         : "";
-      const liveZhHtml = liveInterim
-        ? ` <span class="pip-live-inline-zh">${this.escapeHtml(
-            liveInterimTranslation || "..."
-          )}</span>`
-        : "";
 
-      origCol.innerHTML =
-        origHistory || liveOrigHtml
-          ? `${origHistory}${liveOrigHtml}`
-          : "等待语音输入...";
-      zhCol.innerHTML =
-        zhHistory || liveZhHtml
-          ? `${zhHistory}${liveZhHtml}`
-          : "等待实时翻译...";
+      flowBox.innerHTML =
+        historyHtml || liveHtml
+          ? `${historyHtml}${liveHtml}`
+          : "等待语音输入，每一段话的双语对照将在此同一输出框内连续生成...";
 
-      origCol.scrollTop = origCol.scrollHeight;
-      zhCol.scrollTop = zhCol.scrollHeight;
+      flowBox.scrollTop = flowBox.scrollHeight;
     }
   }
 

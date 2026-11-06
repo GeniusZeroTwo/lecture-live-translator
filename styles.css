@@ -633,55 +633,46 @@ body {
 .transcript-feed.continuous-mode {
   padding: 12px 14px;
   overflow: hidden;
-  max-height: calc(100vh - 240px);
-  min-height: 460px;
+  max-height: calc(100vh - 230px);
+  min-height: 480px;
 }
 
-/* 整堂课不间断双语全文流看板 */
-.continuous-lecture-board {
-  display: grid;
-  gap: 14px;
-  flex: 1;
-  min-height: 430px;
-  height: 100%;
-  overflow: hidden;
-}
-
-.continuous-lecture-board.board-side-by-side {
-  grid-template-columns: 1fr 1fr;
-}
-
-.continuous-lecture-board.board-stacked {
-  grid-template-columns: 1fr;
-  grid-template-rows: 1fr 1fr;
-}
-
-.continuous-column {
+/* 唯一全文输出框：每一段话显示双语对照，全文集中在同一个输出框内 */
+.unified-lecture-box {
   display: flex;
   flex-direction: column;
-  background: rgba(11, 17, 32, 0.72);
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  flex: 1;
+  min-height: 450px;
+  height: 100%;
+  background: rgba(11, 17, 32, 0.78);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-top: 3px solid var(--accent-blue);
   border-radius: 12px;
   overflow: hidden;
-  min-height: 200px;
 }
 
-.continuous-column.source-column {
-  border-top: 3px solid rgba(56, 189, 248, 0.75);
-}
-
-.continuous-column.target-column {
-  border-top: 3px solid rgba(16, 185, 129, 0.8);
-}
-
-.continuous-col-header {
+.unified-box-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 9px 14px;
-  background: rgba(15, 23, 42, 0.9);
-  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  padding: 10px 16px;
+  background: rgba(15, 23, 42, 0.92);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
   flex-shrink: 0;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.unified-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bilingual-arrow {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .col-header-actions {
@@ -690,64 +681,82 @@ body {
   gap: 8px;
 }
 
-.continuous-flow-body {
+.unified-flow-body {
   flex: 1;
-  padding: 16px 18px;
+  padding: 16px 20px;
   overflow-y: auto;
-  font-size: 16px;
-  line-height: 1.85;
-  color: var(--text-primary);
-  word-break: break-word;
-  white-space: pre-wrap;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
-.source-column .continuous-flow-body {
-  color: #e2e8f0;
-  font-size: 15.5px;
-}
-
-.target-column .continuous-flow-body {
-  color: #f8fafc;
-  font-size: 16.5px;
-  font-weight: 500;
-}
-
-.flow-seg {
-  display: inline;
-  padding: 2px 3px;
-  border-radius: 5px;
+/* 输出框内的每一段话（双语对照段落） */
+.bilingual-utterance {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border-left: 3px solid rgba(56, 189, 248, 0.45);
+  transition: background 0.15s ease;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
 }
 
-.flow-seg:hover,
-.flow-seg.hovered {
-  background: rgba(56, 189, 248, 0.22);
-  color: #ffffff;
+.bilingual-utterance:hover {
+  background: rgba(30, 41, 59, 0.55);
 }
 
-.target-column .flow-seg:hover,
-.target-column .flow-seg.hovered {
-  background: rgba(16, 185, 129, 0.24);
-  color: #ffffff;
+.bilingual-utterance.starred {
+  border-left-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.1);
 }
 
-.flow-seg.starred {
-  background: rgba(245, 158, 11, 0.2);
-  border-bottom: 2px solid #f59e0b;
-  color: #fde68a;
+.bilingual-utterance.hidden {
+  display: none;
 }
 
-.flow-seg.live-speaking {
+/* 逐段上下对照（默认：每一段话上原文、下中文翻译） */
+.unified-flow-body.utterance-stacked .bilingual-utterance {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* 逐段左右对照（同一输出框内：每一段话左原文、右中文翻译） */
+.unified-flow-body.utterance-side-by-side .bilingual-utterance {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: baseline;
+}
+
+.utterance-source {
+  font-size: 15px;
+  line-height: 1.65;
+  color: #cbd5e1;
+  word-break: break-word;
+}
+
+.utterance-target {
+  font-size: 16px;
+  line-height: 1.65;
+  font-weight: 600;
+  color: #f8fafc;
+  word-break: break-word;
+}
+
+.utterance-target.seg-error {
+  color: #fca5a5;
+}
+
+.bilingual-utterance.live-utterance {
+  border-left: 3px dashed #38bdf8;
+  background: rgba(56, 189, 248, 0.06);
+}
+
+.utterance-source.live-speaking {
   color: #7dd3fc;
-  background: rgba(56, 189, 248, 0.12);
-  border-bottom: 1px dashed rgba(56, 189, 248, 0.65);
 }
 
-.flow-seg.live-speaking-trans {
+.utterance-target.live-speaking-trans {
   color: #6ee7b7;
-  background: rgba(16, 185, 129, 0.12);
-  border-bottom: 1px dashed rgba(16, 185, 129, 0.65);
 }
 
 .listening-placeholder {

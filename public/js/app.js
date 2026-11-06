@@ -103,7 +103,7 @@ class LectureTranslatorApp {
     const defaults = {
       sourceLang: "ru-RU",
       targetLang: "简体中文",
-      compareLayout: "side-by-side", // side-by-side | stacked
+      compareLayout: "stacked", // stacked (每段上下双语对照) | side-by-side (每段左右双语对照)
       courseSubject: "计算机科学与人工智能 (Computer Science & AI)",
       glossaryKeywords: "",
       farFieldMic: true,
@@ -503,8 +503,8 @@ class LectureTranslatorApp {
         badgeEl.className = "stream-badge active";
       }
 
-      // 确保连续全文面板已挂载
-      if (!document.getElementById("continuous-source-flow")) {
+      // 确保统一全文输出框已挂载
+      if (!document.getElementById("unified-lecture-flow")) {
         this.renderTranscriptList(true);
       } else {
         this.updateInlineLiveNodes();
@@ -550,27 +550,32 @@ class LectureTranslatorApp {
   }
 
   /**
-   * 更新整堂课全文末尾正在说话的实时原文与实时译文节点
+   * 更新单一全文输出框末尾正在说话的实时双语对照段落节点
    */
   updateInlineLiveNodes() {
+    const liveBlockEl = document.getElementById("live-inline-block");
     const liveSrcEl = document.getElementById("live-inline-source");
     const liveTgtEl = document.getElementById("live-inline-target");
-    const srcFlow = document.getElementById("continuous-source-flow");
-    const tgtFlow = document.getElementById("continuous-target-flow");
+    const unifiedFlow = document.getElementById("unified-lecture-flow");
+
+    if (liveBlockEl) {
+      if (this.liveInterimText) {
+        liveBlockEl.classList.remove("hidden");
+      } else {
+        liveBlockEl.classList.add("hidden");
+      }
+    }
 
     if (liveSrcEl) {
-      liveSrcEl.textContent = this.liveInterimText
-        ? ` ${this.liveInterimText}`
-        : "";
+      liveSrcEl.textContent = this.liveInterimText || "";
     }
     if (liveTgtEl) {
       liveTgtEl.textContent = this.liveInterimText
-        ? ` ${this.liveInterimTranslation || "···"}`
+        ? this.liveInterimTranslation || "正在同步翻译..."
         : "";
     }
-    if (this.liveInterimText) {
-      if (srcFlow) srcFlow.scrollTop = srcFlow.scrollHeight;
-      if (tgtFlow) tgtFlow.scrollTop = tgtFlow.scrollHeight;
+    if (this.liveInterimText && unifiedFlow) {
+      unifiedFlow.scrollTop = unifiedFlow.scrollHeight;
     }
   }
 
@@ -831,7 +836,7 @@ class LectureTranslatorApp {
   }
 
   /**
-   * 渲染整堂课不间断连续全文「原始语言 ⇄ 中文翻译」对照视图
+   * 渲染整堂课单一输出框：每一段话显示双语对照（原文 + 中文译文），全文在同一个输出框内连续呈现
    */
   renderTranscriptList(scrollToBottom = false) {
     const container = document.getElementById("transcript-feed");
@@ -842,18 +847,18 @@ class LectureTranslatorApp {
       : this.transcriptList;
 
     if (countBadge) {
-      countBadge.textContent = `已累计 ${this.transcriptList.length} 句`;
+      countBadge.textContent = `已累计 ${this.transcriptList.length} 段`;
     }
 
     if (items.length === 0 && !this.liveInterimText && !this.isListening) {
       container.innerHTML = `
         <div class="empty-state">
           <div class="empty-icon">🎓</div>
-          <h3>整堂课连续全文「原始语言 ⇄ 中文翻译」实时同传</h3>
+          <h3>整堂课双语同传（每段话双语对照 · 全文集中在一个输出框内）</h3>
           <p>
             1. 在上方选择授课语言（支持 <strong>🇷🇺 俄语 Русский</strong>、<strong>🇺🇸 英语 English</strong> 等多语种一键切换）<br/>
-            2. 点击 <strong>【🎙️ 开始课堂同传】</strong> 或 <strong>【🎓 模拟教授讲课测试】</strong>，系统将<strong>不拆碎卡片，直接以整堂课连续全文形式</strong>同步展示原始语言与中文翻译对照<br/>
-            3. 在整堂课全文中，鼠标悬停任意一句话可自动高亮对应的原文与译文，点击任意一句可标记为 ⭐ 重点
+            2. 点击 <strong>【🎙️ 开始课堂同传】</strong> 或 <strong>【🎓 模拟教授讲课测试】</strong>，整堂课全文将统一在<strong>同一个输出框内</strong>连续输出，<strong>每一段话自动显示原始语言与中文翻译对照</strong><br/>
+            3. 点击输出框内任意一段话即可标记为 ⭐ 课堂重点，课后可一键复制或导出整堂课双语全文
           </p>
         </div>
       `;
@@ -861,104 +866,79 @@ class LectureTranslatorApp {
     }
 
     const langMeta = getLanguageMeta(this.settings.sourceLang);
-    const layoutClass =
-      this.settings.compareLayout === "stacked"
-        ? "board-stacked"
-        : "board-side-by-side";
+    const utteranceLayoutClass =
+      this.settings.compareLayout === "side-by-side"
+        ? "utterance-side-by-side"
+        : "utterance-stacked";
 
-    const sourceSpansHtml = items
+    const paragraphsHtml = items
       .map((item) => {
         const displaySrc = item.correctedSource || item.source || "";
-        return `<span class="flow-seg ${
-          item.starred ? "starred" : ""
-        }" data-id="${item.id}" title="[${
-          item.timestamp
-        }] 点击可标记/取消⭐课堂重点">${this.escapeHtml(displaySrc)} </span>`;
-      })
-      .join("");
-
-    const targetSpansHtml = items
-      .map((item) => {
         const displayTrans =
           item.status === "translating" && !item.translation
-            ? "··· "
+            ? "正在同步翻译..."
             : `${item.translation || ""}`;
-        return `<span class="flow-seg ${item.starred ? "starred" : ""} ${
-          item.status === "error" ? "seg-error" : ""
-        }" data-id="${item.id}" title="[${
-          item.timestamp
-        }] 点击可标记/取消⭐课堂重点">${this.escapeHtml(displayTrans)} </span>`;
+
+        return `
+          <div class="bilingual-utterance ${
+            item.starred ? "starred" : ""
+          }" data-id="${item.id}" title="[${
+            item.timestamp
+          }] 点击可标记/取消⭐课堂重点">
+            <div class="utterance-source">${this.escapeHtml(displaySrc)}</div>
+            <div class="utterance-target ${
+              item.status === "error" ? "seg-error" : ""
+            }">${this.escapeHtml(displayTrans)}</div>
+          </div>
+        `;
       })
       .join("");
 
     container.innerHTML = `
-      <div class="continuous-lecture-board ${layoutClass}">
-        <!-- 左栏/上栏：整堂课原始语言连续全文流 -->
-        <div class="continuous-column source-col">
-          <div class="continuous-col-header">
-            <span class="pane-badge source">${langMeta.flag} 原始语言整堂课连续全文 (${langMeta.name})</span>
-            <div class="col-header-actions">
-              <span class="live-meta-text">悬停对照 · 点击句子标⭐重点</span>
-              <button type="button" id="btn-copy-source-only" class="card-action-btn">📋 复制原文</button>
-            </div>
+      <div class="unified-lecture-box">
+        <div class="unified-box-header">
+          <div class="unified-header-left">
+            <span class="pane-badge source">${langMeta.flag} ${langMeta.name}</span>
+            <span class="bilingual-arrow">⇄</span>
+            <span class="pane-badge target">🇨🇳 中文翻译 · 整堂课单框双语全文流</span>
           </div>
-          <div id="continuous-source-flow" class="continuous-flow-body source-text">
-            ${sourceSpansHtml}<span id="live-inline-source" class="flow-seg live-speaking">${
-              this.liveInterimText ? ` ${this.escapeHtml(this.liveInterimText)}` : ""
-            }</span>
-            ${
-              items.length === 0 && !this.liveInterimText
-                ? `<span class="listening-placeholder">🎙️ 正在监听课堂声音，老师开口说话时将在此处连续实时生成${langMeta.name}全文...</span>`
-                : ""
-            }
+          <div class="col-header-actions">
+            <span id="live-trans-status" class="live-meta-text">每段话双语对照 · 点击段落标⭐重点</span>
+            <button type="button" id="btn-copy-source-only" class="card-action-btn">📋 仅复制原文</button>
+            <button type="button" id="btn-copy-target-only" class="card-action-btn">📋 仅复制译文</button>
           </div>
         </div>
 
-        <!-- 右栏/下栏：整堂课中文翻译连续全文流 -->
-        <div class="continuous-column target-col">
-          <div class="continuous-col-header">
-            <span class="pane-badge target">🇨🇳 中文翻译整堂课连续对照 (简体中文)</span>
-            <div class="col-header-actions">
-              <span id="live-trans-status" class="live-meta-text">实时同步对照</span>
-              <button type="button" id="btn-copy-target-only" class="card-action-btn">📋 复制译文</button>
-            </div>
-          </div>
-          <div id="continuous-target-flow" class="continuous-flow-body target-text">
-            ${targetSpansHtml}<span id="live-inline-target" class="flow-seg live-speaking-trans">${
+        <!-- 唯一全文输出框：所有段落的双语对照及实时正在讲的话全部在此同一个输出框内 -->
+        <div id="unified-lecture-flow" class="unified-flow-body ${utteranceLayoutClass}">
+          ${paragraphsHtml}
+          <div id="live-inline-block" class="bilingual-utterance live-utterance ${
+            this.liveInterimText ? "" : "hidden"
+          }">
+            <div id="live-inline-source" class="utterance-source live-speaking">${this.escapeHtml(
+              this.liveInterimText || ""
+            )}</div>
+            <div id="live-inline-target" class="utterance-target live-speaking-trans">${this.escapeHtml(
               this.liveInterimText
-                ? ` ${this.escapeHtml(this.liveInterimTranslation || "···")}`
+                ? this.liveInterimTranslation || "正在同步翻译..."
                 : ""
-            }</span>
-            ${
-              items.length === 0 && !this.liveInterimText
-                ? `<span class="listening-placeholder">⚡ 说话时此处将同步连续生成整堂课中文翻译全文...</span>`
-                : ""
-            }
+            )}</div>
           </div>
+          ${
+            items.length === 0 && !this.liveInterimText
+              ? `<div class="listening-placeholder">🎙️ 正在监听课堂声音，老师开口讲课时，每一段话的「${langMeta.name}原文 + 中文翻译对照」将在此同一个输出框内连续生成...</div>`
+              : ""
+          }
         </div>
       </div>
     `;
 
-    const srcFlowEl = document.getElementById("continuous-source-flow");
-    const tgtFlowEl = document.getElementById("continuous-target-flow");
+    const unifiedFlowEl = document.getElementById("unified-lecture-flow");
 
-    // 绑定双栏悬停高亮对齐与点击标重点
-    container.querySelectorAll(".flow-seg[data-id]").forEach((segEl) => {
-      const id = segEl.getAttribute("data-id");
-
-      segEl.addEventListener("mouseenter", () => {
-        container
-          .querySelectorAll(`.flow-seg[data-id="${id}"]`)
-          .forEach((el) => el.classList.add("hovered"));
-      });
-
-      segEl.addEventListener("mouseleave", () => {
-        container
-          .querySelectorAll(`.flow-seg[data-id="${id}"]`)
-          .forEach((el) => el.classList.remove("hovered"));
-      });
-
-      segEl.addEventListener("click", () => {
+    // 点击任意一段话可切换重点标记
+    container.querySelectorAll(".bilingual-utterance[data-id]").forEach((el) => {
+      const id = el.getAttribute("data-id");
+      el.addEventListener("click", () => {
         const target = this.transcriptList.find((i) => i.id === id);
         if (target) {
           target.starred = !target.starred;
@@ -968,13 +948,13 @@ class LectureTranslatorApp {
       });
     });
 
-    // 绑定复制原文 / 复制译文按钮
+    // 绑定仅复制原文 / 仅复制译文按钮
     const btnCopySrc = document.getElementById("btn-copy-source-only");
     if (btnCopySrc) {
       btnCopySrc.addEventListener("click", () => {
         const text = this.transcriptList
           .map((i) => i.correctedSource || i.source)
-          .join(" ");
+          .join("\n");
         if (text && navigator.clipboard) {
           navigator.clipboard.writeText(text).then(() => {
             this.showBannerNotice("已复制整堂课原始语言全文", "success");
@@ -986,7 +966,7 @@ class LectureTranslatorApp {
     const btnCopyTgt = document.getElementById("btn-copy-target-only");
     if (btnCopyTgt) {
       btnCopyTgt.addEventListener("click", () => {
-        const text = this.transcriptList.map((i) => i.translation).join(" ");
+        const text = this.transcriptList.map((i) => i.translation).join("\n");
         if (text && navigator.clipboard) {
           navigator.clipboard.writeText(text).then(() => {
             this.showBannerNotice("已复制整堂课中文翻译全文", "success");
@@ -995,38 +975,8 @@ class LectureTranslatorApp {
       });
     }
 
-    // 同步滚动条
-    if (srcFlowEl && tgtFlowEl) {
-      srcFlowEl.addEventListener("scroll", () => {
-        if (this.isSyncingScroll) return;
-        this.isSyncingScroll = true;
-        const ratio =
-          srcFlowEl.scrollTop /
-          Math.max(1, srcFlowEl.scrollHeight - srcFlowEl.clientHeight);
-        tgtFlowEl.scrollTop =
-          ratio * (tgtFlowEl.scrollHeight - tgtFlowEl.clientHeight);
-        setTimeout(() => {
-          this.isSyncingScroll = false;
-        }, 25);
-      });
-
-      tgtFlowEl.addEventListener("scroll", () => {
-        if (this.isSyncingScroll) return;
-        this.isSyncingScroll = true;
-        const ratio =
-          tgtFlowEl.scrollTop /
-          Math.max(1, tgtFlowEl.scrollHeight - tgtFlowEl.clientHeight);
-        srcFlowEl.scrollTop =
-          ratio * (srcFlowEl.scrollHeight - srcFlowEl.clientHeight);
-        setTimeout(() => {
-          this.isSyncingScroll = false;
-        }, 25);
-      });
-
-      if (scrollToBottom) {
-        srcFlowEl.scrollTop = srcFlowEl.scrollHeight;
-        tgtFlowEl.scrollTop = tgtFlowEl.scrollHeight;
-      }
+    if (scrollToBottom && unifiedFlowEl) {
+      unifiedFlowEl.scrollTop = unifiedFlowEl.scrollHeight;
     }
   }
 
@@ -1035,16 +985,15 @@ class LectureTranslatorApp {
       this.showBannerNotice("当前还没有课堂同传内容可复制", "warn");
       return;
     }
-    const fullOriginal = this.transcriptList
-      .map((i) => i.correctedSource || i.source)
-      .join(" ");
-    const fullTranslation = this.transcriptList
-      .map((i) => i.translation)
-      .join(" ");
-    const combined = `【整堂课原始语言全文】\n${fullOriginal}\n\n【整堂课中文翻译全文】\n${fullTranslation}`;
+    const bilingualParagraphs = this.transcriptList
+      .map(
+        (i) =>
+          `${i.correctedSource || i.source}\n${i.translation || ""}`
+      )
+      .join("\n\n");
     if (navigator.clipboard) {
-      navigator.clipboard.writeText(combined).then(() => {
-        this.showBannerNotice("已复制整堂课「原始语言 + 中文翻译」完整全文", "success");
+      navigator.clipboard.writeText(bilingualParagraphs).then(() => {
+        this.showBannerNotice("已复制整堂课逐段双语对照全文", "success");
       });
     }
   }
@@ -1085,27 +1034,23 @@ class LectureTranslatorApp {
 
     const dateStr = new Date().toISOString().slice(0, 10);
     const langMeta = getLanguageMeta(this.settings.sourceLang);
-    const fullOriginal = this.transcriptList
-      .map((i) => i.correctedSource || i.source)
-      .join(" ");
-    const fullTranslation = this.transcriptList
-      .map((i) => i.translation)
-      .join(" ");
+    const bilingualParagraphs = this.transcriptList
+      .map(
+        (i) =>
+          `${i.correctedSource || i.source}\n**${i.translation || ""}**`
+      )
+      .join("\n\n");
 
     const lines = [
-      `# 🎓 留学课堂整堂课双语同传全文笔记 (${dateStr})`,
+      `# 🎓 留学课堂整堂课双语对照全文笔记 (${dateStr})`,
       ``,
       `- **授课语言**：${langMeta.flag} ${langMeta.name}`,
       `- **课程专业领域**：${this.settings.courseSubject}`,
       `- **预设课件词汇**：${this.settings.glossaryKeywords || "无"}`,
       ``,
-      `## ${langMeta.flag} 整堂课原始语言全文`,
+      `## 📝 整堂课逐段双语对照全文 (${langMeta.flag} 原文 ⇄ 🇨🇳 中文翻译)`,
       ``,
-      fullOriginal,
-      ``,
-      `## 🇨🇳 整堂课中文翻译全文`,
-      ``,
-      fullTranslation,
+      bilingualParagraphs,
       ``
     ];
 

@@ -687,66 +687,69 @@ async function fetchZeroConfigTranslation(
 
   const startTime = Date.now();
 
-  // 1. 整句精翻模式 (standard) 优先请求 Cloudflare `/api/translate` 边缘接口，以使用后台「变量和密钥」环境变量配置的 API 选项与访问密码校验
-  if (mode === "standard") {
-    let passcodeBlockedError = "";
-    try {
-      const cleanPasscode = String(extraMeta.passcode || "").trim();
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 6500);
-      const res = await fetch("/api/translate", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(cleanPasscode ? { "X-Access-Passcode": cleanPasscode } : {})
-        },
-        body: JSON.stringify({
-          text: cleanText,
-          sourceLang,
-          targetLang,
-          courseSubject: extraMeta.courseSubject || "",
-          glossaryKeywords: extraMeta.glossaryKeywords || "",
-          passcode: cleanPasscode,
-          mode
-        }),
-        signal: controller.signal
-      });
-      clearTimeout(timer);
+  // 1. 无论整句精翻 (standard) 还是实时流式预览 (fast-stream)，均优先请求 Cloudflare `/api/translate` 边缘接口
+  let passcodeBlockedError = "";
+  try {
+    const cleanPasscode = String(extraMeta.passcode || "").trim();
+    const controller = new AbortController();
+    const timeoutMs = mode === "fast-stream" ? 5000 : 14000;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const res = await fetch("/api/translate", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(cleanPasscode ? { "X-Access-Passcode": cleanPasscode } : {})
+      },
+      body: JSON.stringify({
+        text: cleanText,
+        sourceLang,
+        targetLang,
+        courseSubject: extraMeta.courseSubject || "",
+        glossaryKeywords: extraMeta.glossaryKeywords || "",
+        passcode: cleanPasscode,
+        mode
+      }),
+      signal: controller.signal
+    });
+    clearTimeout(timer);
 
-      const data = await res.json().catch(() => ({}));
-      if (res.status === 401 || data?.requiresPasscode) {
-        passcodeBlockedError =
-          data?.error || "需要输入正确的访问密码才能使用同传翻译服务";
-      } else if (res.ok) {
-        const parsed = parseStructuredTranslation(
-          data.text || data.translation || ""
-        );
-        const finalTrans = data.translation || parsed.translation;
-        if (finalTrans) {
-          const result = {
-            translation: finalTrans,
-            correctedSource: parsed.correctedSource || "",
-            terms:
-              Array.isArray(data.terms) && data.terms.length > 0
-                ? data.terms
-                : parsed.terms,
-            latencyMs: data.latencyMs || Date.now() - startTime
-          };
-          liveTranslationCache.set(cacheKey, result);
-          return result;
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401 || data?.requiresPasscode) {
+      passcodeBlockedError =
+        data?.error || "需要输入正确的访问密码才能使用同传翻译服务";
+    } else if (res.ok) {
+      const parsed = parseStructuredTranslation(
+        data.text || data.translation || ""
+      );
+      const finalTrans = data.translation || parsed.translation;
+      if (finalTrans && !/MYMEMORY WARNING/i.test(finalTrans)) {
+        const result = {
+          translation: finalTrans,
+          correctedSource: parsed.correctedSource || "",
+          terms:
+            Array.isArray(data.terms) && data.terms.length > 0
+              ? data.terms
+              : parsed.terms,
+          latencyMs: data.latencyMs || Date.now() - startTime
+        };
+        if (liveTranslationCache.size > 200) {
+          const firstKey = liveTranslationCache.keys().next().value;
+          liveTranslationCache.delete(firstKey);
         }
+        liveTranslationCache.set(cacheKey, result);
+        return result;
       }
-    } catch (_) {
-      // 若本地静态运行无 /api/translate 则自动向下走直连通道
     }
-    if (passcodeBlockedError) {
-      const err = new Error(passcodeBlockedError);
-      err.requiresPasscode = true;
-      throw err;
-    }
+  } catch (_) {
+    // 若本地静态运行无 /api/translate 则自动向下走直连通道
+  }
+  if (passcodeBlockedError) {
+    const err = new Error(passcodeBlockedError);
+    err.requiresPasscode = true;
+    throw err;
   }
 
-  // 2. 极速流式预览 (fast-stream) 或纯静态环境：调用 Google GTX 极速神经翻译接口
+  // 2. 本地纯静态环境备用通道 A：Google GTX 神经翻译接口
   try {
     const gtxUrl =
       `https://translate.googleapis.com/translate_a/single?client=gtx` +
@@ -754,7 +757,7 @@ async function fetchZeroConfigTranslation(
       `&dt=t&dt=bd&dj=1&q=${encodeURIComponent(cleanText)}`;
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3200);
+    const timer = setTimeout(() => controller.abort(), 3500);
     const res = await fetch(gtxUrl, { method: "GET", signal: controller.signal });
     clearTimeout(timer);
 
@@ -782,32 +785,39 @@ async function fetchZeroConfigTranslation(
           terms: dictTerms,
           latencyMs: Date.now() - startTime
         };
-        if (liveTranslationCache.size > 200) {
-          const firstKey = liveTranslationCache.keys().next().value;
-          liveTranslationCache.delete(firstKey);
-        }
         liveTranslationCache.set(cacheKey, result);
         return result;
       }
     }
   } catch (_) {}
 
-  // 3. 终极兜底：MyMemory 免费接口
-  const mmUrl = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(
-    cleanText
-  )}&langpair=${encodeURIComponent(`${sl}|${tl}`)}`;
-  const mmRes = await fetch(mmUrl);
-  const mmData = await mmRes.json().catch(() => ({}));
-  const mmTranslation = mmData?.responseData?.translatedText || "";
-  if (mmTranslation) {
-    const result = {
-      translation: mmTranslation,
-      terms: [],
-      latencyMs: Date.now() - startTime
-    };
-    liveTranslationCache.set(cacheKey, result);
-    return result;
-  }
+  // 3. 本地纯静态环境备用通道 B：Clients5 神经翻译集群（彻底移除有每日配额告警的 MyMemory）
+  try {
+    const client5Url =
+      `https://clients5.google.com/translate_a/t?client=dict-chrome-ex` +
+      `&sl=${encodeURIComponent(sl)}&tl=${encodeURIComponent(tl)}` +
+      `&q=${encodeURIComponent(cleanText)}`;
+    const res2 = await fetch(client5Url, { method: "GET" });
+    if (res2.ok) {
+      const data2 = await res2.json();
+      const trans2 = Array.isArray(data2)
+        ? typeof data2[0] === "string"
+          ? data2[0]
+          : Array.isArray(data2[0])
+          ? data2[0].map((i) => (Array.isArray(i) ? i[0] : i)).join("")
+          : ""
+        : "";
+      if (trans2 && trans2.trim()) {
+        const result = {
+          translation: trans2.trim(),
+          terms: [],
+          latencyMs: Date.now() - startTime
+        };
+        liveTranslationCache.set(cacheKey, result);
+        return result;
+      }
+    }
+  } catch (_) {}
 
   throw new Error("网络连接波动，请稍后重试");
 }
@@ -818,14 +828,16 @@ async function fetchZeroConfigTranslation(
 export async function translateLiveInterimText({
   text,
   sourceLang = "ru-RU",
-  targetLang = "zh-CN"
+  targetLang = "zh-CN",
+  passcode = ""
 }) {
   try {
     const res = await fetchZeroConfigTranslation(
       text,
       sourceLang,
       targetLang,
-      "fast-stream"
+      "fast-stream",
+      { passcode }
     );
     return {
       ok: true,

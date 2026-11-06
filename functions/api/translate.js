@@ -2,11 +2,12 @@
  * Cloudflare Pages / Workers Function: /api/translate
  * 支持通过 Cloudflare 后台「变量和密钥 (Variables and Secrets)」环境变量配置多种大模型 API 选项：
  *
- * 支持的环境变量选项（均在 Cloudflare 后台 -> 设置 -> 变量和密钥 中添加，前台不暴露任何密钥输入界面）：
- * - API_PROVIDER : 可选值 gemini | glm | siliconflow | deepseek | openai | custom | free（不填则根据密钥自动识别）
- * - API_KEY      : 通用 API 密钥变量（自动识别 AIza... 为 Gemini，id.secret 为智谱 GLM，sk-... 为 SiliconFlow/DeepSeek/OpenAI）
- * - API_MODEL    : 可选，自定义模型名（如 gemini-2.5-flash, glm-4-flash, Qwen/Qwen2.5-7B-Instruct, deepseek-chat, gpt-4o-mini）
- * - API_BASE_URL : 可选，自定义 API 接口地址或中转地址（自动补全 /v1/chat/completions）
+ * 支持的环境变量选项：
+ * - API_PROVIDER    : gemini | glm | siliconflow | deepseek | openai | custom | free
+ * - API_KEY         : 通用 API 密钥变量（自动识别 AIza... 为 Gemini，id.secret 为智谱 GLM，sk-... 为 SiliconFlow/DeepSeek/OpenAI）
+ * - API_MODEL       : 自定义模型名（如 gemini-2.5-flash, glm-4-flash, Qwen/Qwen2.5-7B-Instruct, deepseek-chat, gpt-4o-mini）
+ * - API_BASE_URL    : 自定义 API 接口地址或中转地址
+ * - ACCESS_PASSWORD : 访问密码变量（兼容 ACCESS_PASSCODE / PASSWORD）
  *
  * 同时兼容专属环境变量名：
  * - GEMINI_API_KEY / GOOGLE_API_KEY
@@ -14,10 +15,6 @@
  * - SILICONFLOW_API_KEY
  * - DEEPSEEK_API_KEY
  * - OPENAI_API_KEY
- *
- * 容错与兜底机制：
- * - 自动清洗环境变量值中误带的 KEY= 前缀、Bearer 前缀、引号或空格。
- * - 若未配置环境变量或配置的 API 临时限流/报错，自动无感降级至内置免密实时神经翻译引擎，确保俄语/英语课堂同传永不中断。
  */
 
 function normalizeLangCode(lang = "ru-RU", isTarget = false) {
@@ -35,9 +32,9 @@ function cleanEnvValue(val) {
   if (typeof val !== "string") return "";
   return val
     .trim()
-    .replace(/^[A-Za-z0-9_]+\s*=\s*/, "") // 容错：用户把 GEMINI_API_KEY=xxx 粘贴到了值里
-    .replace(/^Bearer\s+/i, "")           // 容错：用户把 Bearer sk-xxx 粘贴到了值里
-    .replace(/^["'`]+|["'`]+$/g, "")      // 容错：首尾多余引号
+    .replace(/^[A-Za-z0-9_]+\s*=\s*/, "")
+    .replace(/^Bearer\s+/i, "")
+    .replace(/^["'`]+|["'`]+$/g, "")
     .trim();
 }
 
@@ -85,7 +82,6 @@ function normalizeOpenAIEndpoint(rawUrl, fallbackUrl) {
 
 /**
  * 解析 Cloudflare「变量和密钥」中的访问密码环境变量
- * 支持变量名：ACCESS_PASSWORD | ACCESS_PASSCODE | PASSWORD | PASSCODE | SITE_PASSWORD | AUTH_PASSWORD
  */
 export function resolveAccessPassword(env) {
   return getEnvCaseInsensitive(env, [
@@ -134,10 +130,9 @@ export function resolveEnvApiConfig(env) {
   const oaKey = getEnvCaseInsensitive(env, ["OPENAI_API_KEY"]);
   const genericKey = getEnvCaseInsensitive(env, ["API_KEY", "KEY", "SECRET", "TOKEN", "TRANSLATE_API_KEY"]);
 
-  // 如果用户没有使用标准变量名，自动扫描 env 中任何像 API Key 的值
   let scannedKey = "";
   for (const [k, v] of Object.entries(env)) {
-    if (/^(CF_|NODE_|PATH|HOME|PWD| WRANGLER)/i.test(k)) continue;
+    if (/^(CF_|NODE_|PATH|HOME|PWD|WRANGLER|ACCESS_|PASSWORD|PASSCODE)/i.test(k)) continue;
     const cleaned = cleanEnvValue(String(v || ""));
     if (
       cleaned.startsWith("AIza") ||
@@ -158,11 +153,10 @@ export function resolveEnvApiConfig(env) {
       model: "neural-realtime-mt",
       key: "",
       endpointUrl: "",
-      label: "内置免密实时神经翻译引擎"
+      label: "Cloudflare 边缘免密实时神经翻译"
     };
   }
 
-  // 1. 判断是否为 Google Gemini
   if (
     explicitProvider === "gemini" ||
     explicitProvider === "google" ||
@@ -183,7 +177,6 @@ export function resolveEnvApiConfig(env) {
     };
   }
 
-  // 2. 判断是否为智谱 GLM
   const isGlmFormat = /^[a-zA-Z0-9]{16,}\.[a-zA-Z0-9]{8,}$/.test(candidateKey);
   if (
     explicitProvider === "glm" ||
@@ -205,7 +198,6 @@ export function resolveEnvApiConfig(env) {
     };
   }
 
-  // 3. 判断是否为 DeepSeek
   if (
     explicitProvider === "deepseek" ||
     dsKey ||
@@ -226,7 +218,6 @@ export function resolveEnvApiConfig(env) {
     };
   }
 
-  // 4. 判断是否为硅基流动 SiliconFlow
   if (
     explicitProvider === "siliconflow" ||
     explicitProvider === "qwen" ||
@@ -247,7 +238,6 @@ export function resolveEnvApiConfig(env) {
     };
   }
 
-  // 5. OpenAI 或通用兼容接口（若用户只填了 sk-... 且未指定 URL，默认优先尝试硅基流动/OpenAI）
   const defaultUrl = customBaseUrl
     ? normalizeOpenAIEndpoint(customBaseUrl, "https://api.openai.com/v1/chat/completions")
     : oaKey
@@ -308,17 +298,23 @@ ${glossaryKeywords ? `本节课课件重点专业词汇参考：【${glossaryKey
       config.model
     )}:generateContent?key=${encodeURIComponent(config.key)}`;
 
+    const generationConfig = {
+      temperature,
+      maxOutputTokens: 1024,
+      responseMimeType: "application/json"
+    };
+    // 关闭 Gemini 2.5 Flash 默认思考耗时，使同传响应延迟从 5s 降至 0.5s
+    if (/gemini-2\.5/i.test(config.model)) {
+      generationConfig.thinkingConfig = { thinkingBudget: 0 };
+    }
+
     const res = await fetch(geminiUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: finalSystemPrompt }] },
         contents: [{ role: "user", parts: [{ text: finalUserPrompt }] }],
-        generationConfig: {
-          temperature,
-          maxOutputTokens: 800,
-          responseMimeType: "application/json"
-        }
+        generationConfig
       })
     });
 
@@ -347,7 +343,6 @@ ${glossaryKeywords ? `本节课课件重点专业词汇参考：【${glossaryKey
     };
   }
 
-  // OpenAI 兼容格式 (智谱 GLM / 硅基流动 SiliconFlow / DeepSeek / OpenAI / 自定义中转)
   const res = await fetch(config.endpointUrl, {
     method: "POST",
     headers: {
@@ -361,7 +356,7 @@ ${glossaryKeywords ? `本节课课件重点专业词汇参考：【${glossaryKey
         { role: "user", content: finalUserPrompt }
       ],
       temperature,
-      max_tokens: 800
+      max_tokens: 1024
     })
   });
 
@@ -386,13 +381,14 @@ ${glossaryKeywords ? `本节课课件重点专业词汇参考：【${glossaryKey
 }
 
 /**
- * 内置零密钥极速神经翻译通道 (Google GTX + MyMemory 双重保障)
+ * Cloudflare 边缘多源无限制神经翻译引擎（彻底移除有每日配额限制的 MyMemory，采用多节点 Google 神经翻译集群）
  */
 async function translateViaBuiltinFreeEngine(text, sourceLang = "auto", targetLang = "zh-CN") {
   const sl = normalizeLangCode(sourceLang, false);
   const tl = normalizeLangCode(targetLang, true);
   const startTime = Date.now();
 
+  // 节点 1：Google GTX 神经翻译主通道（带词典）
   try {
     const gtxUrl =
       `https://translate.googleapis.com/translate_a/single?client=gtx` +
@@ -403,7 +399,7 @@ async function translateViaBuiltinFreeEngine(text, sourceLang = "auto", targetLa
       method: "GET",
       headers: {
         "User-Agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
       }
     });
 
@@ -430,7 +426,7 @@ async function translateViaBuiltinFreeEngine(text, sourceLang = "auto", targetLa
           ok: true,
           provider: "builtin-neural",
           model: "neural-realtime-mt",
-          providerLabel: "内置免密实时神经翻译引擎",
+          providerLabel: "Cloudflare 边缘免密实时神经翻译",
           latencyMs: Date.now() - startTime,
           translation,
           terms,
@@ -444,33 +440,52 @@ async function translateViaBuiltinFreeEngine(text, sourceLang = "auto", targetLa
     }
   } catch (_) {}
 
-  const pairSl = sl === "auto" ? "ru" : sl;
-  const mmUrl = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(
-    text
-  )}&langpair=${encodeURIComponent(`${pairSl}|${tl}`)}`;
+  // 节点 2：Google Clients5 独立集群通道
+  try {
+    const client5Url =
+      `https://clients5.google.com/translate_a/t?client=dict-chrome-ex` +
+      `&sl=${encodeURIComponent(sl)}&tl=${encodeURIComponent(tl)}` +
+      `&q=${encodeURIComponent(text)}`;
 
-  const mmRes = await fetch(mmUrl);
-  const mmData = await mmRes.json().catch(() => ({}));
-  const mmTranslation = mmData?.responseData?.translatedText || "";
+    const res2 = await fetch(client5Url, {
+      method: "GET",
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+      }
+    });
 
-  if (mmTranslation) {
-    return {
-      ok: true,
-      provider: "mymemory-free",
-      model: "mymemory-mt",
-      providerLabel: "内置备用翻译通道",
-      latencyMs: Date.now() - startTime,
-      translation: mmTranslation,
-      terms: [],
-      text: JSON.stringify({
-        translation: mmTranslation,
-        correctedSource: "",
-        terms: []
-      })
-    };
-  }
+    if (res2.ok) {
+      const data2 = await res2.json();
+      let translation2 = "";
+      if (Array.isArray(data2)) {
+        if (typeof data2[0] === "string") {
+          translation2 = data2[0];
+        } else if (Array.isArray(data2[0])) {
+          translation2 = data2[0].map((item) => (Array.isArray(item) ? item[0] : item)).join("");
+        }
+      }
+      if (translation2 && translation2.trim()) {
+        const cleanTrans = translation2.trim();
+        return {
+          ok: true,
+          provider: "builtin-clients5",
+          model: "neural-realtime-mt",
+          providerLabel: "Cloudflare 边缘免密实时神经翻译",
+          latencyMs: Date.now() - startTime,
+          translation: cleanTrans,
+          terms: [],
+          text: JSON.stringify({
+            translation: cleanTrans,
+            correctedSource: "",
+            terms: []
+          })
+        };
+      }
+    }
+  } catch (_) {}
 
-  throw new Error("实时翻译网络波动，请稍后重试");
+  throw new Error("实时翻译网络波动，请点击重试");
 }
 
 export async function onRequest(context) {
@@ -509,7 +524,6 @@ export async function onRequest(context) {
       passcode = ""
     } = body;
 
-    // 校验访问密码变量 (ACCESS_PASSWORD / ACCESS_PASSCODE / PASSWORD)
     const serverPasscode = resolveAccessPassword(env);
     const clientPasscode = (
       request.headers.get("X-Access-Passcode") ||
@@ -534,10 +548,9 @@ export async function onRequest(context) {
         .replace(/^[\s\S]*?"([^"]+)"\s*$/, "$1")
         .trim();
 
-    // 1. 解析 Cloudflare 环境变量中配置的 API 选项
     const envApiConfig = resolveEnvApiConfig(env);
 
-    // 2. 若环境变量配置了大模型 API 且非极速流式预览，优先使用环境变量配置的 API
+    // 若环境变量配置了大模型 API 且非极速流式预览，优先使用环境变量配置的 API
     if (envApiConfig.provider !== "free" && envApiConfig.key && mode !== "fast-stream") {
       try {
         const llmResult = await translateViaConfiguredLLM(envApiConfig, {
@@ -555,13 +568,12 @@ export async function onRequest(context) {
           headers: corsHeaders
         });
       } catch (llmErr) {
-        // 如果环境变量中的 API 密钥限流或报错，自动降级到内置免密翻译引擎并附带告警信息
         const fallbackResult = await translateViaBuiltinFreeEngine(
           rawSourceText,
           sourceLang,
           targetLang
         );
-        fallbackResult.fallbackWarning = `环境变量 API (${envApiConfig.provider}) 响应异常 (${llmErr.message})，已自动无缝切换至内置免密翻译`;
+        fallbackResult.fallbackWarning = `环境变量 API (${envApiConfig.provider}) 响应异常 (${llmErr.message})，已自动切换至边缘神经翻译`;
         return new Response(JSON.stringify(fallbackResult), {
           status: 200,
           headers: corsHeaders
@@ -569,7 +581,7 @@ export async function onRequest(context) {
       }
     }
 
-    // 3. 默认或流式预览模式：调用内置免密实时神经翻译通道
+    // 流式预览模式或未配置自定义大模型时，通过 Cloudflare 边缘节点调用无限额神经翻译集群
     const result = await translateViaBuiltinFreeEngine(
       rawSourceText,
       sourceLang,

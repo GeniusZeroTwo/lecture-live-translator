@@ -128,7 +128,10 @@ class LectureTranslatorApp {
   loadTranscript() {
     try {
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY_TRANSCRIPT));
-      return Array.isArray(saved) ? saved : [];
+      if (!Array.isArray(saved)) return [];
+      return saved.filter(
+        (item) => !/MYMEMORY WARNING/i.test(String(item?.translation || ""))
+      );
     } catch (_) {
       return [];
     }
@@ -527,7 +530,8 @@ class LectureTranslatorApp {
         const res = await translateLiveInterimText({
           text: interimText,
           sourceLang: this.settings.sourceLang,
-          targetLang: this.settings.targetLang
+          targetLang: this.settings.targetLang,
+          passcode: this.settings.passcode
         });
         if (currentSeq !== this.interimRequestSeq) return;
         if (res.ok && res.translation) {
@@ -541,7 +545,7 @@ class LectureTranslatorApp {
           }
           this.syncPiPWindow();
         }
-      }, 260);
+      }, 380);
     } else {
       clearTimeout(this.interimTransTimer);
       this.interimRequestSeq++;

@@ -1,26 +1,52 @@
 /**
  * 留学课堂实时同传助手主控制器 (app.js)
- * 集成：方案一 (Web Speech API + Gemini 2.5 Flash) + API 健康状态仪表盘 + 课堂远场优化 + 悬浮窗 + 笔记导出
+ * 特性：
+ * 1. 全面支持俄语 (ru-RU)、英语 (en-US) 等多语种实时课堂语音识别与翻译
+ * 2. 第一轨（边说边译实时双语流）+ 第二轨（整句原始语言 ⇄ 中文翻译并排/上下对照卡片）
+ * 3. 免配置开箱即用：无任何前台 API 添加弹窗或密钥依赖
  */
 import {
-  ASR_PROVIDERS,
-  TRANSLATION_PROVIDERS,
+  SUPPORTED_LANGUAGES,
+  getLanguageMeta,
   APIHealthMonitor,
   WebSpeechClassroomEngine,
+  translateLiveInterimText,
   translateLectureSegment
 } from "./providers.js";
 import { ClassroomAudioGuardian } from "./audio-meter.js";
 import { FloatingSubtitlePiP } from "./pip-window.js";
 
-const STORAGE_KEY_SETTINGS = "classsync_settings_v1";
-const STORAGE_KEY_TRANSCRIPT = "classsync_transcript_v1";
-const STORAGE_KEY_GLOSSARY = "classsync_extracted_terms_v1";
+const STORAGE_KEY_SETTINGS = "classsync_settings_v2";
+const STORAGE_KEY_TRANSCRIPT = "classsync_transcript_v2";
+const STORAGE_KEY_GLOSSARY = "classsync_extracted_terms_v2";
 
-const DEMO_LECTURE_SENTENCES = [
-  "Good morning everyone. Today we are going to examine how backpropagation and stochastic gradient descent optimize deep neural networks when the loss landscape is highly non-convex.",
-  "A common misconception on the midterm exam is that increasing the learning rate always accelerates convergence, whereas in practice it often causes divergence or oscillation around local minima.",
-  "From a macroeconomic perspective, Nash equilibrium explains why central banks must account for rational expectations when adjusting monetary policy and interest rates."
-];
+const DEMO_LECTURE_BY_LANG = {
+  ru: [
+    "Доброе утро, уважаемые студенты. Сегодня на лекции мы подробно рассмотрим, как метод обратного распространения ошибки и стохастический градиентный спуск оптимизируют глубокие нейронные сети.",
+    "Обратите особое внимание перед экзаменом: слишком высокая скорость обучения часто приводит к расходимости алгоритма и колебаниям вокруг локального минимума функции потерь.",
+    "С точки зрения макроэкономической теории, равновесие Нэша объясняет, почему центральный банк должен учитывать инфляционные ожидания при изменении ключевой процентной ставки."
+  ],
+  en: [
+    "Good morning everyone. Today we are going to examine how backpropagation and stochastic gradient descent optimize deep neural networks when the loss landscape is highly non-convex.",
+    "A common misconception on the midterm exam is that increasing the learning rate always accelerates convergence, whereas in practice it often causes divergence or oscillation around local minima.",
+    "From a macroeconomic perspective, Nash equilibrium explains why central banks must account for rational expectations when adjusting monetary policy and interest rates."
+  ],
+  ja: [
+    "皆さんおはようございます。本日の講義では、誤差逆伝播法と確率的勾配降下法が深層ニューラルネットワークをどのように最適化するかを詳しく解説します。"
+  ],
+  de: [
+    "Guten Morgen zusammen. In der heutigen Vorlesung untersuchen wir, wie Backpropagation und das Gradientenverfahren tiefe neuronale Netze optimieren."
+  ],
+  fr: [
+    "Bonjour à tous. Aujourd'hui, nous allons examiner comment la rétropropagation et la descente de gradient optimisent les réseaux de neurones profonds."
+  ],
+  ko: [
+    "여러분 좋은 아침입니다. 오늘 강의에서는 역전파 알고리즘과 확률적 경사 하강법이 심층 신경망을 어떻게 최적화하는지 살펴보겠습니다."
+  ],
+  es: [
+    "Buenos días a todos. Hoy analizaremos cómo la retropropagación y el descenso de gradiente estocástico optimizan las redes neuronales profundas."
+  ]
+};
 
 class LectureTranslatorApp {
   constructor() {
@@ -30,10 +56,14 @@ class LectureTranslatorApp {
 
     this.isListening = false;
     this.liveInterimText = "";
+    this.liveInterimTranslation = "";
+    this.lastCompletedPair = null;
     this.filterStarredOnly = false;
     this.demoTimer = null;
+    this.interimTransTimer = null;
+    this.interimRequestSeq = 0;
 
-    // 1. 初始化 API 健康监控中心
+    // 1. 初始化实时翻译健康监控中心
     this.healthMonitor = new APIHealthMonitor((healthState) => {
       this.renderHealthUI(healthState);
     });
@@ -44,16 +74,16 @@ class LectureTranslatorApp {
       onWakeLockChange: (wlState) => this.updateWakeLockUI(wlState)
     });
 
-    // 3. 初始化置顶悬浮字幕窗 (Document PiP)
+    // 3. 初始化置顶悬浮双语字幕窗 (Document PiP)
     this.pipController = new FloatingSubtitlePiP({
       onToggleRecognition: () => this.toggleListening(),
       onClose: () => this.updatePiPButtonUI()
     });
 
-    // 4. 初始化方案一 Web Speech 课堂识别引擎
+    // 4. 初始化 Web Speech 课堂识别引擎
     this.asrEngine = new WebSpeechClassroomEngine({
       lang: this.settings.sourceLang,
-      maxWordsPerSegment: 28,
+      maxWordsPerSegment: 26,
       onInterim: (interim) => this.handleInterimSpeech(interim),
       onFinalSegment: (sentence, meta) =>
         this.handleFinalSpeechSegment(sentence, meta),
@@ -64,6 +94,7 @@ class LectureTranslatorApp {
     });
 
     this.initDOM();
+    this.syncLanguageUI();
     this.renderTranscriptList();
     this.renderExtractedTerms();
     this.runInitialHealthProbe();
@@ -71,18 +102,9 @@ class LectureTranslatorApp {
 
   loadSettings() {
     const defaults = {
-      asrProvider: "web-speech",
-      translationProvider: "gemini-2.5-flash",
-      apiKeys: {
-        "gemini-2.5-flash": "",
-        "gemini-2.5-flash-lite": "",
-        "glm-4-flash": "",
-        "siliconflow-qwen": ""
-      },
-      passcode: "",
-      routeMode: "auto", // auto | direct | proxy
-      sourceLang: "en-US",
+      sourceLang: "ru-RU",
       targetLang: "简体中文",
+      compareLayout: "side-by-side", // side-by-side | stacked
       courseSubject: "计算机科学与人工智能 (Computer Science & AI)",
       glossaryKeywords: "",
       farFieldMic: true
@@ -90,11 +112,7 @@ class LectureTranslatorApp {
     try {
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY_SETTINGS));
       if (saved && typeof saved === "object") {
-        return {
-          ...defaults,
-          ...saved,
-          apiKeys: { ...defaults.apiKeys, ...(saved.apiKeys || {}) }
-        };
+        return { ...defaults, ...saved };
       }
     } catch (_) {}
     return defaults;
@@ -142,65 +160,40 @@ class LectureTranslatorApp {
     } catch (_) {}
   }
 
-  getActiveApiKey(providerId = this.settings.translationProvider) {
-    // Gemini Flash 和 Flash-Lite 共用同一个 Google AI Studio Key
-    if (providerId.startsWith("gemini-")) {
-      return (
-        this.settings.apiKeys["gemini-2.5-flash"] ||
-        this.settings.apiKeys["gemini-2.5-flash-lite"] ||
-        ""
-      );
-    }
-    return this.settings.apiKeys[providerId] || "";
-  }
-
-  setActiveApiKey(providerId, keyVal) {
-    const clean = (keyVal || "").trim();
-    if (providerId.startsWith("gemini-")) {
-      this.settings.apiKeys["gemini-2.5-flash"] = clean;
-      this.settings.apiKeys["gemini-2.5-flash-lite"] = clean;
-    } else {
-      this.settings.apiKeys[providerId] = clean;
-    }
-    this.saveSettings();
-  }
-
   initDOM() {
-    // 顶部控制与状态栏元素
     this.btnStartStop = document.getElementById("btn-start-stop");
     this.btnDemoLecture = document.getElementById("btn-demo-lecture");
     this.btnOpenPiP = document.getElementById("btn-open-pip");
-    this.btnOpenSettings = document.getElementById("btn-open-settings");
     this.btnPingHealth = document.getElementById("btn-ping-health");
     this.btnToggleHealthPanel = document.getElementById(
       "btn-toggle-health-panel"
     );
 
-    // 课堂设置栏
     this.selectSourceLang = document.getElementById("select-source-lang");
+    this.selectCompareLayout = document.getElementById("select-compare-layout");
     this.selectCourseSubject = document.getElementById("select-course-subject");
     this.inputGlossary = document.getElementById("input-glossary");
     this.toggleFarField = document.getElementById("toggle-far-field");
-    this.selectTranslationModel = document.getElementById(
-      "select-translation-model"
-    );
 
-    // 填充初始值
-    this.selectSourceLang.value = this.settings.sourceLang;
+    // 填充初始设置
+    if (SUPPORTED_LANGUAGES[this.settings.sourceLang]) {
+      this.selectSourceLang.value = this.settings.sourceLang;
+    } else {
+      this.settings.sourceLang = "ru-RU";
+      this.selectSourceLang.value = "ru-RU";
+    }
+    this.selectCompareLayout.value =
+      this.settings.compareLayout || "side-by-side";
     this.selectCourseSubject.value = this.settings.courseSubject;
     this.inputGlossary.value = this.settings.glossaryKeywords;
     this.toggleFarField.checked = this.settings.farFieldMic;
-    this.selectTranslationModel.value = this.settings.translationProvider;
 
-    // 绑定事件
+    // 绑定顶部与主控栏事件
     this.btnStartStop.addEventListener("click", () => this.toggleListening());
     this.btnDemoLecture.addEventListener("click", () =>
       this.runClassroomSimulation()
     );
     this.btnOpenPiP.addEventListener("click", () => this.togglePiPWindow());
-    this.btnOpenSettings.addEventListener("click", () =>
-      this.openSettingsModal()
-    );
     this.btnPingHealth.addEventListener("click", () =>
       this.runInitialHealthProbe(true)
     );
@@ -209,10 +202,28 @@ class LectureTranslatorApp {
       panel.classList.toggle("collapsed");
     });
 
+    // 授课语言切换
     this.selectSourceLang.addEventListener("change", (e) => {
-      this.settings.sourceLang = e.target.value;
+      this.setSourceLanguage(e.target.value);
+    });
+
+    // 俄语 / 英语快捷切换按钮
+    document.querySelectorAll(".quick-lang-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const lang = btn.getAttribute("data-lang");
+        if (lang) {
+          this.setSourceLanguage(lang);
+          const meta = getLanguageMeta(lang);
+          this.showBannerNotice(`已切换授课语言为：${meta.flag} ${meta.name}`, "success");
+        }
+      });
+    });
+
+    // 对照排版切换（左右并排 vs 上下双行）
+    this.selectCompareLayout.addEventListener("change", (e) => {
+      this.settings.compareLayout = e.target.value;
       this.saveSettings();
-      this.asrEngine.setLanguage(this.settings.sourceLang);
+      this.renderTranscriptList(false);
     });
 
     this.selectCourseSubject.addEventListener("change", (e) => {
@@ -235,13 +246,7 @@ class LectureTranslatorApp {
       }
     });
 
-    this.selectTranslationModel.addEventListener("change", (e) => {
-      this.settings.translationProvider = e.target.value;
-      this.saveSettings();
-      this.runInitialHealthProbe();
-    });
-
-    // 手动输入/粘贴教授讲义或句子快速翻译
+    // 手动输入/粘贴俄语或英语课件句子快速对照翻译
     const manualForm = document.getElementById("manual-input-form");
     const manualInput = document.getElementById("manual-sentence-input");
     manualForm.addEventListener("submit", (e) => {
@@ -249,10 +254,17 @@ class LectureTranslatorApp {
       const val = manualInput.value.trim();
       if (!val) return;
       manualInput.value = "";
-      this.handleFinalSpeechSegment(val, { reason: "manual-input" });
+
+      // 自动检测是否包含俄语西里尔字母，智能匹配源语言标签
+      const hasCyrillic = /[\u0400-\u04FF]/.test(val);
+      const detectedLang = hasCyrillic ? "ru-RU" : this.settings.sourceLang;
+      this.handleFinalSpeechSegment(val, {
+        reason: "manual-input",
+        sourceLang: detectedLang
+      });
     });
 
-    // 笔记操作栏：只看重点、导出 Markdown、清空课堂记录
+    // 笔记操作栏
     document
       .getElementById("btn-filter-starred")
       .addEventListener("click", (e) => {
@@ -277,10 +289,6 @@ class LectureTranslatorApp {
         this.renderExtractedTerms();
       });
 
-    // 设置弹窗逻辑
-    this.initSettingsModal();
-
-    // 当页面重新可见时自动恢复防息屏锁
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible" && this.isListening) {
         this.audioGuardian.acquireWakeLock();
@@ -288,109 +296,35 @@ class LectureTranslatorApp {
     });
   }
 
-  initSettingsModal() {
-    const modal = document.getElementById("settings-modal");
-    const closeBtn = document.getElementById("btn-close-settings");
-    const saveBtn = document.getElementById("btn-save-settings");
-    const testBtn = document.getElementById("btn-test-key-modal");
-    const providerSelect = document.getElementById("modal-select-provider");
-    const keyInput = document.getElementById("modal-input-apikey");
-    const routeSelect = document.getElementById("modal-select-route");
-    const passcodeInput = document.getElementById("modal-input-passcode");
-    const helpLink = document.getElementById("modal-key-help-link");
-    const descText = document.getElementById("modal-provider-desc");
-
-    const syncModalFields = (providerId) => {
-      const p =
-        TRANSLATION_PROVIDERS[providerId] ||
-        TRANSLATION_PROVIDERS["gemini-2.5-flash"];
-      keyInput.placeholder = p.keyPlaceholder;
-      keyInput.value = this.getActiveApiKey(providerId);
-      helpLink.href = p.keyHelpUrl;
-      descText.textContent = p.description;
-      routeSelect.value = this.settings.routeMode;
-      passcodeInput.value = this.settings.passcode;
-    };
-
-    providerSelect.addEventListener("change", (e) => {
-      syncModalFields(e.target.value);
-    });
-
-    closeBtn.addEventListener("click", () => {
-      modal.classList.add("hidden");
-    });
-
-    modal.addEventListener("click", (e) => {
-      if (e.target === modal) modal.classList.add("hidden");
-    });
-
-    saveBtn.addEventListener("click", async () => {
-      const chosenProvider = providerSelect.value;
-      this.settings.translationProvider = chosenProvider;
-      this.setActiveApiKey(chosenProvider, keyInput.value);
-      this.settings.routeMode = routeSelect.value;
-      this.settings.passcode = passcodeInput.value.trim();
-      this.saveSettings();
-
-      this.selectTranslationModel.value = chosenProvider;
-      modal.classList.add("hidden");
-      await this.runInitialHealthProbe(true);
-    });
-
-    testBtn.addEventListener("click", async () => {
-      const chosenProvider = providerSelect.value;
-      this.setActiveApiKey(chosenProvider, keyInput.value);
-      this.settings.routeMode = routeSelect.value;
-      this.settings.passcode = passcodeInput.value.trim();
-      this.saveSettings();
-
-      const feedbackEl = document.getElementById("modal-test-feedback");
-      feedbackEl.textContent = "⏳ 正在检测 API 密钥与延迟...";
-      feedbackEl.className = "modal-feedback checking";
-
-      const res = await this.healthMonitor.probeHealth({
-        providerId: chosenProvider,
-        apiKey: this.getActiveApiKey(chosenProvider),
-        passcode: this.settings.passcode,
-        routeMode: this.settings.routeMode
-      });
-
-      if (res.ok) {
-        feedbackEl.textContent = `✅ 连接成功！响应延迟 ${res.latencyMs} ms (${
-          res.via === "cloudflare-edge" ? "Cloudflare 边缘代理" : "浏览器直连"
-        })`;
-        feedbackEl.className = "modal-feedback success";
-      } else {
-        feedbackEl.textContent = `❌ 连接未通过：${
-          res.error || "请检查 API Key 是否正确"
-        }`;
-        feedbackEl.className = "modal-feedback error";
-      }
-    });
-
-    this.syncModalFields = syncModalFields;
+  setSourceLanguage(langCode) {
+    this.settings.sourceLang = langCode;
+    this.selectSourceLang.value = langCode;
+    this.saveSettings();
+    this.asrEngine.setLanguage(langCode);
+    this.syncLanguageUI();
   }
 
-  openSettingsModal() {
-    const modal = document.getElementById("settings-modal");
-    const providerSelect = document.getElementById("modal-select-provider");
-    providerSelect.value = this.settings.translationProvider;
-    this.syncModalFields(this.settings.translationProvider);
-    document.getElementById("modal-test-feedback").textContent = "";
-    modal.classList.remove("hidden");
+  syncLanguageUI() {
+    const meta = getLanguageMeta(this.settings.sourceLang);
+    const liveBadge = document.getElementById("live-source-lang-badge");
+    if (liveBadge) {
+      liveBadge.textContent = `${meta.flag} 原始语言实时识别 · ${meta.name}`;
+    }
+    if (this.inputGlossary && !this.inputGlossary.value) {
+      this.inputGlossary.placeholder = meta.placeholderHint;
+    }
+
+    document.querySelectorAll(".quick-lang-btn").forEach((btn) => {
+      const btnLang = btn.getAttribute("data-lang");
+      btn.classList.toggle("active", btnLang === this.settings.sourceLang);
+    });
   }
 
   async runInitialHealthProbe(showToast = false) {
-    const providerId = this.settings.translationProvider;
-    const res = await this.healthMonitor.probeHealth({
-      providerId,
-      apiKey: this.getActiveApiKey(providerId),
-      passcode: this.settings.passcode,
-      routeMode: this.settings.routeMode
-    });
+    const res = await this.healthMonitor.probeHealth();
     if (showToast && res.ok) {
       this.showBannerNotice(
-        `API 健康诊断通过：${TRANSLATION_PROVIDERS[providerId]?.name} 延迟 ${res.latencyMs}ms`,
+        `实时翻译通道连通正常：响应延迟 ${res.latencyMs}ms（免配置已就绪）`,
         "success"
       );
     }
@@ -410,7 +344,6 @@ class LectureTranslatorApp {
       return;
     }
 
-    // 检查浏览器是否支持 Web Speech API
     if (!this.asrEngine.isSupported) {
       this.showBannerNotice(
         "当前浏览器不支持内置 Web Speech API，请使用桌面或移动端 Chrome / Edge 浏览器打开。",
@@ -419,7 +352,6 @@ class LectureTranslatorApp {
       return;
     }
 
-    // 1. 启动麦克风远场拾音优化与实时电平监测
     const micResult = await this.audioGuardian.startMicrophoneMonitor(
       this.settings.farFieldMic
     );
@@ -430,16 +362,14 @@ class LectureTranslatorApp {
         errorMessage: micResult.error
       });
       this.showBannerNotice(
-        `无法启动麦克风：${micResult.error}（请检查浏览器地址栏权限）`,
+        `无法启动麦克风：${micResult.error}（请检查浏览器地址栏麦克风权限）`,
         "error"
       );
       return;
     }
 
-    // 2. 启动防息屏锁
     await this.audioGuardian.acquireWakeLock();
 
-    // 3. 启动 Web Speech 流式识别
     this.asrEngine.lang = this.settings.sourceLang;
     this.asrEngine.start();
     this.isListening = true;
@@ -448,7 +378,7 @@ class LectureTranslatorApp {
   }
 
   /**
-   * 模拟教授讲课测试（无需开麦即可在宿舍测试整套 Gemini 2.5 Flash 翻译链路与 API 健康监控）
+   * 模拟教授讲课测试（根据当前选择的语言自动模拟俄语教授或英语教授讲课，测试实时双语对照）
    */
   async runClassroomSimulation() {
     if (this.demoTimer) {
@@ -456,59 +386,113 @@ class LectureTranslatorApp {
       this.demoTimer = null;
     }
 
-    const activeKey = this.getActiveApiKey();
-    const edgeHasKey = this.healthMonitor.state.edge.hasServerGeminiKey;
-    if (!activeKey && !edgeHasKey) {
-      this.openSettingsModal();
-      const feedbackEl = document.getElementById("modal-test-feedback");
-      feedbackEl.textContent =
-        "💡 提示：请先粘贴免费的 Gemini API Key，即可体验课堂模拟同传与术语提取！";
-      feedbackEl.className = "modal-feedback checking";
-      return;
-    }
-
-    const sample =
-      DEMO_LECTURE_SENTENCES[
-        Math.floor(Math.random() * DEMO_LECTURE_SENTENCES.length)
-      ];
+    const langMeta = getLanguageMeta(this.settings.sourceLang);
+    const pool =
+      DEMO_LECTURE_BY_LANG[langMeta.short] || DEMO_LECTURE_BY_LANG.ru;
+    const sample = pool[Math.floor(Math.random() * pool.length)];
     const words = sample.split(" ");
     let idx = 0;
 
     this.btnDemoLecture.disabled = true;
-    this.btnDemoLecture.textContent = "🎓 教授正在讲课中...";
+    this.btnDemoLecture.textContent = `🎓 正在模拟${langMeta.flag}教授讲课...`;
 
     const stepInterim = () => {
       idx += 3;
       if (idx < words.length) {
         this.handleInterimSpeech(words.slice(0, idx).join(" "));
-        this.demoTimer = setTimeout(stepInterim, 180);
+        this.demoTimer = setTimeout(stepInterim, 220);
       } else {
-        this.handleInterimSpeech("");
         this.btnDemoLecture.disabled = false;
         this.btnDemoLecture.textContent = "🎓 模拟教授讲课测试";
-        this.handleFinalSpeechSegment(sample, { reason: "simulation" });
+        this.handleFinalSpeechSegment(sample, {
+          reason: "simulation",
+          sourceLang: this.settings.sourceLang
+        });
       }
     };
 
     stepInterim();
   }
 
+  /**
+   * 处理第一轨实时流式语音：立即显示原始语言，并高频同步刷新中文翻译对照
+   */
   handleInterimSpeech(interimText) {
     this.liveInterimText = interimText;
     const streamEl = document.getElementById("live-interim-stream");
+    const transEl = document.getElementById("live-interim-translation");
     const badgeEl = document.getElementById("live-stream-badge");
+    const wordCountEl = document.getElementById("live-word-count");
+    const transStatusEl = document.getElementById("live-trans-status");
 
     if (interimText) {
       streamEl.textContent = interimText;
       streamEl.classList.add("active");
       const wordCount = interimText.split(/\s+/).filter(Boolean).length;
-      badgeEl.textContent = `实时听写中 · ${wordCount} 词`;
+      badgeEl.textContent = "实时双语同传中";
       badgeEl.className = "stream-badge active";
+      if (wordCountEl) {
+        wordCountEl.textContent = `已识别 ${wordCount} 词`;
+      }
+
+      // 触发防抖实时流式翻译，让用户在教授说话过程中实时看到中文翻译对照
+      clearTimeout(this.interimTransTimer);
+      const currentSeq = ++this.interimRequestSeq;
+      if (transStatusEl) {
+        transStatusEl.textContent = "正在同步翻译...";
+      }
+
+      this.interimTransTimer = setTimeout(async () => {
+        const res = await translateLiveInterimText({
+          text: interimText,
+          sourceLang: this.settings.sourceLang,
+          targetLang: this.settings.targetLang
+        });
+        if (currentSeq !== this.interimRequestSeq) return;
+        if (res.ok && res.translation) {
+          this.liveInterimTranslation = res.translation;
+          if (transEl) {
+            transEl.textContent = res.translation;
+            transEl.classList.add("active");
+          }
+          if (transStatusEl) {
+            transStatusEl.textContent = `实时对照 (${res.latencyMs}ms)`;
+          }
+          this.syncPiPWindow();
+        }
+      }, 260);
     } else {
-      streamEl.textContent = this.isListening
-        ? "正在监听课堂音频（老师说话时此处将 0.1 秒级实时跳出原文）..."
-        : "点击上方【开始课堂同传】或【模拟教授讲课测试】开始实时识别...";
-      streamEl.classList.remove("active");
+      clearTimeout(this.interimTransTimer);
+      this.interimRequestSeq++;
+      this.liveInterimTranslation = "";
+
+      if (this.lastCompletedPair) {
+        streamEl.textContent = this.lastCompletedPair.source;
+        streamEl.classList.remove("active");
+        if (transEl) {
+          transEl.textContent = this.lastCompletedPair.translation;
+          transEl.classList.remove("active");
+        }
+        if (wordCountEl) {
+          wordCountEl.textContent = "上一句原文（等待新语音...）";
+        }
+        if (transStatusEl) {
+          transStatusEl.textContent = "上一句译文对照";
+        }
+      } else {
+        streamEl.textContent = this.isListening
+          ? "正在监听课堂音频（老师说话时此处将 0.1 秒级实时跳出原始语言）..."
+          : "点击上方【开始课堂同传】或【模拟教授讲课测试】开始实时识别...";
+        streamEl.classList.remove("active");
+        if (transEl) {
+          transEl.textContent = "说话时此处将实时同步显示中文翻译对照...";
+          transEl.classList.remove("active");
+        }
+        if (wordCountEl) {
+          wordCountEl.textContent = this.isListening ? "监听中" : "等待语音输入";
+        }
+      }
+
       badgeEl.textContent = this.isListening ? "监听中" : "待机";
       badgeEl.className = "stream-badge";
     }
@@ -516,10 +500,14 @@ class LectureTranslatorApp {
     this.syncPiPWindow();
   }
 
+  /**
+   * 处理完整句子或长难句切片：归档至下方双语对照列表并提取学术词汇
+   */
   async handleFinalSpeechSegment(sourceText, meta = {}) {
     const cleanSource = String(sourceText || "").trim();
     if (!cleanSource) return;
 
+    const usedSourceLang = meta.sourceLang || this.settings.sourceLang;
     const itemId = `seg_${Date.now()}_${Math.random()
       .toString(36)
       .slice(2, 7)}`;
@@ -529,43 +517,38 @@ class LectureTranslatorApp {
       second: "2-digit"
     });
 
+    // 如果刚才实时流已经翻译出了预览结果，先作为即时预览展示，实现 0 等待对照
+    const initialPreview = this.liveInterimTranslation || "";
+
     const newItem = {
       id: itemId,
       timestamp,
+      sourceLang: usedSourceLang,
       source: cleanSource,
       correctedSource: "",
-      translation: "",
+      translation: initialPreview,
       terms: [],
-      status: "translating", // translating | done | error
+      status: "translating",
       latencyMs: null,
-      providerName:
-        TRANSLATION_PROVIDERS[this.settings.translationProvider]?.name ||
-        "Gemini 2.5 Flash",
       starred: false,
       splitReason: meta.reason || "vad-final"
     };
 
-    // 获取前 2 句已完成翻译的句子作为上下文
-    const recentContext = this.transcriptList
-      .filter((item) => item.status === "done" && item.translation)
-      .slice(-2);
+    this.lastCompletedPair = {
+      source: cleanSource,
+      translation: initialPreview || "正在生成中文翻译对照..."
+    };
+    this.handleInterimSpeech("");
 
     this.transcriptList.push(newItem);
     this.saveTranscript();
     this.renderTranscriptList(true);
     this.syncPiPWindow();
 
-    // 调用大模型精翻
     const result = await translateLectureSegment({
       text: cleanSource,
-      providerId: this.settings.translationProvider,
-      apiKey: this.getActiveApiKey(),
-      passcode: this.settings.passcode,
-      routeMode: this.settings.routeMode,
-      courseSubject: this.settings.courseSubject,
       glossaryKeywords: this.settings.glossaryKeywords,
-      recentContext,
-      sourceLang: this.settings.sourceLang,
+      sourceLang: usedSourceLang,
       targetLang: this.settings.targetLang,
       healthMonitor: this.healthMonitor
     });
@@ -580,13 +563,21 @@ class LectureTranslatorApp {
       targetItem.terms = result.terms || [];
       targetItem.latencyMs = result.latencyMs;
 
-      // 将新提取的专业词汇加入右侧课堂术语表
+      this.lastCompletedPair = {
+        source: cleanSource,
+        translation: result.translation
+      };
+      if (!this.liveInterimText) {
+        this.handleInterimSpeech("");
+      }
+
       if (Array.isArray(result.terms) && result.terms.length > 0) {
         this.mergeExtractedTerms(result.terms);
       }
     } else {
       targetItem.status = "error";
-      targetItem.translation = `⚠️ 翻译未完成: ${result.error}`;
+      targetItem.translation =
+        targetItem.translation || `⚠️ 翻译未完成: ${result.error}`;
       targetItem.latencyMs = result.latencyMs;
     }
 
@@ -605,14 +596,8 @@ class LectureTranslatorApp {
 
     const result = await translateLectureSegment({
       text: targetItem.source,
-      providerId: this.settings.translationProvider,
-      apiKey: this.getActiveApiKey(),
-      passcode: this.settings.passcode,
-      routeMode: this.settings.routeMode,
-      courseSubject: this.settings.courseSubject,
       glossaryKeywords: this.settings.glossaryKeywords,
-      recentContext: [],
-      sourceLang: this.settings.sourceLang,
+      sourceLang: targetItem.sourceLang || this.settings.sourceLang,
       targetLang: this.settings.targetLang,
       healthMonitor: this.healthMonitor
     });
@@ -639,14 +624,17 @@ class LectureTranslatorApp {
   mergeExtractedTerms(newTerms) {
     let added = false;
     for (const term of newTerms) {
-      if (!term || !term.en || !term.zh) continue;
+      const origTerm = (term?.term || term?.en || "").trim();
+      const zhTerm = (term?.zh || "").trim();
+      if (!origTerm || !zhTerm) continue;
+
       const exists = this.extractedTerms.some(
-        (t) => t.en.toLowerCase() === term.en.toLowerCase()
+        (t) => t.en.toLowerCase() === origTerm.toLowerCase()
       );
       if (!exists) {
         this.extractedTerms.unshift({
-          en: term.en.trim(),
-          zh: term.zh.trim(),
+          en: origTerm,
+          zh: zhTerm,
           time: new Date().toLocaleTimeString([], {
             hour: "2-digit",
             minute: "2-digit"
@@ -662,10 +650,9 @@ class LectureTranslatorApp {
   }
 
   /**
-   * 渲染顶部 API 健康状态栏与详细诊断面板
+   * 渲染顶部健康状态栏
    */
   renderHealthUI(state) {
-    // 1. ASR 状态胶囊
     const asrDot = document.getElementById("health-asr-dot");
     const asrText = document.getElementById("health-asr-text");
     const asrDetail = document.getElementById("detail-asr-status");
@@ -679,54 +666,27 @@ class LectureTranslatorApp {
       unsupported: "error"
     };
     const asrClass = asrStatusMap[state.asr.status] || "neutral";
-    asrDot.className = `status-dot ${asrClass}`;
-    asrText.textContent = `ASR: ${state.asr.statusText}`;
+    if (asrDot) asrDot.className = `status-dot ${asrClass}`;
+    if (asrText) asrText.textContent = `ASR: ${state.asr.statusText}`;
     if (asrDetail) asrDetail.textContent = state.asr.statusText;
     if (asrReconnect) {
       asrReconnect.textContent = `${state.asr.reconnectCount} 次静音自动续接`;
     }
 
-    // 2. 翻译大模型状态胶囊
     const llmDot = document.getElementById("health-llm-dot");
     const llmText = document.getElementById("health-llm-text");
-    const providerObj =
-      TRANSLATION_PROVIDERS[state.translation.providerId] ||
-      TRANSLATION_PROVIDERS["gemini-2.5-flash"];
-
     const llmStatusMap = {
       healthy: "healthy",
       degraded: "warning",
-      ratelimited: "error",
-      unconfigured: "warning",
       checking: "checking",
       error: "error"
     };
-    const llmClass = llmStatusMap[state.translation.status] || "neutral";
-    llmDot.className = `status-dot ${llmClass}`;
-    llmText.textContent = `${providerObj.name.replace("Google ", "")}: ${
-      state.translation.statusText
-    }`;
-
-    // 3. RPM 免费额度实时速率条
-    const rpmValueEl = document.getElementById("health-rpm-value");
-    const rpmBarEl = document.getElementById("health-rpm-bar");
-    const rpmRatio = Math.min(
-      100,
-      Math.round(
-        (state.translation.currentRpm / state.translation.rpmLimit) * 100
-      )
-    );
-    if (rpmValueEl) {
-      rpmValueEl.textContent = `${state.translation.currentRpm} / ${state.translation.rpmLimit} RPM`;
-    }
-    if (rpmBarEl) {
-      rpmBarEl.style.width = `${rpmRatio}%`;
-      rpmBarEl.className = `meter-fill ${
-        rpmRatio >= 85 ? "danger" : rpmRatio >= 60 ? "warn" : "ok"
-      }`;
+    const llmClass = llmStatusMap[state.translation.status] || "healthy";
+    if (llmDot) llmDot.className = `status-dot ${llmClass}`;
+    if (llmText) {
+      llmText.textContent = `实时同传翻译: ${state.translation.statusText}`;
     }
 
-    // 4. 详细健康抽屉指标更新
     const elLatency = document.getElementById("detail-llm-latency");
     const elAvgLatency = document.getElementById("detail-llm-avg-latency");
     const elSuccessRate = document.getElementById("detail-llm-success-rate");
@@ -758,7 +718,7 @@ class LectureTranslatorApp {
     }
     if (elLastError) {
       if (state.translation.lastError) {
-        elLastError.textContent = `最近告警: ${state.translation.lastError}`;
+        elLastError.textContent = `提示: ${state.translation.lastError}`;
         elLastError.classList.remove("hidden");
       } else {
         elLastError.textContent = "";
@@ -808,6 +768,7 @@ class LectureTranslatorApp {
             this.isListening ? "同传拾音中" : "已暂停"
           } · ${this.healthMonitor.state.translation.statusText}`,
           liveInterim: this.liveInterimText,
+          liveInterimTranslation: this.liveInterimTranslation,
           recentItems: this.transcriptList
         });
         this.updatePiPButtonUI();
@@ -832,14 +793,18 @@ class LectureTranslatorApp {
     this.pipController.update({
       isListening: this.isListening,
       statusText: `${
-        this.isListening ? "同传运行中" : "已暂停"
+        this.isListening ? "实时双语同传中" : "已暂停"
       } · ${this.healthMonitor.state.translation.statusText}`,
       liveInterim: this.liveInterimText,
+      liveInterimTranslation: this.liveInterimTranslation,
       recentItems: this.transcriptList,
       hasError: this.healthMonitor.state.translation.status === "error"
     });
   }
 
+  /**
+   * 渲染「原始语言 ⇄ 中文翻译」实时双语对照卡片列表
+   */
   renderTranscriptList(scrollToBottom = false) {
     const container = document.getElementById("transcript-feed");
     const countBadge = document.getElementById("transcript-count-badge");
@@ -856,19 +821,27 @@ class LectureTranslatorApp {
       container.innerHTML = `
         <div class="empty-state">
           <div class="empty-icon">🎓</div>
-          <h3>准备好开始今天的留学课堂同传了</h3>
+          <h3>免配置开箱即用 · 实时显示「原始语言 ⇄ 中文翻译」双语对照</h3>
           <p>
-            1. 首次使用请点击右上角 <strong>【⚙️ API 配置】</strong> 填入免费的 <code>Gemini API Key</code><br/>
-            2. 在上方选择本节课的<strong>专业领域</strong>并粘贴几个 PPT 核心专有名词（可显著提升识别与精翻准确率）<br/>
-            3. 点击 <strong>【🎓 模拟教授讲课测试】</strong> 可立即验证整套翻译延迟，或点击 <strong>【🎙️ 开始课堂同传】</strong> 实时拾音
+            1. 在上方选择授课语言（已支持 <strong>🇷🇺 俄语 Русский</strong>、<strong>🇺🇸 英语 English</strong>、日语、德语、法语等）<br/>
+            2. 点击 <strong>【🎙️ 开始课堂同传】</strong> 即可边听课边实时查看<strong>原始语言与中文翻译对照</strong>（无需配置任何 API 密钥）<br/>
+            3. 点击 <strong>【🎓 模拟教授讲课测试】</strong> 可立即体验俄语/英语课堂实时双语同传与专业词汇提取
           </p>
         </div>
       `;
       return;
     }
 
+    const layoutClass =
+      this.settings.compareLayout === "stacked"
+        ? "compare-stacked"
+        : "compare-side-by-side";
+
     container.innerHTML = items
       .map((item) => {
+        const langMeta = getLanguageMeta(
+          item.sourceLang || this.settings.sourceLang
+        );
         const hasCorrection =
           item.correctedSource &&
           item.correctedSource.toLowerCase() !== item.source.toLowerCase();
@@ -894,6 +867,7 @@ class LectureTranslatorApp {
             <div class="card-meta">
               <div class="meta-left">
                 <span class="time-tag">${item.timestamp}</span>
+                <span class="lang-tag-mini">${langMeta.flag} ${langMeta.name} ⇄ 🇨🇳 中文</span>
                 ${
                   item.splitReason === "long-clause-split"
                     ? `<span class="reason-tag" title="教授长句未停顿，已自动在从句边界抢先切分">⚡ 长句抢先分段</span>`
@@ -906,6 +880,9 @@ class LectureTranslatorApp {
                 }
               </div>
               <div class="meta-actions">
+                <button class="card-action-btn btn-copy-pair" data-id="${item.id}" title="复制本句原文与译文对照">
+                  📋 复制对照
+                </button>
                 ${
                   item.status === "error"
                     ? `<button class="card-action-btn btn-retry" data-id="${item.id}" title="重试翻译">🔄 重试</button>`
@@ -919,26 +896,36 @@ class LectureTranslatorApp {
               </div>
             </div>
 
-            <div class="card-source">
-              ${this.escapeHtml(item.source)}
-            </div>
+            <!-- 原始语言与中文翻译实时对照主视图 -->
+            <div class="bilingual-compare-box ${layoutClass}">
+              <div class="compare-pane source-pane">
+                <div class="pane-header">
+                  <span class="pane-badge source">${langMeta.sourceBadge}</span>
+                </div>
+                <div class="card-source">${this.escapeHtml(item.source)}</div>
+                ${
+                  hasCorrection
+                    ? `<div class="card-correction">
+                        ✨ 术语修正: <span>${this.escapeHtml(
+                          item.correctedSource
+                        )}</span>
+                       </div>`
+                    : ""
+                }
+              </div>
 
-            ${
-              hasCorrection
-                ? `<div class="card-correction">
-                    ✨ AI 结合专业背景修正同音词: <span>${this.escapeHtml(
-                      item.correctedSource
-                    )}</span>
-                   </div>`
-                : ""
-            }
-
-            <div class="card-translation">
-              ${
-                item.status === "translating"
-                  ? `<span class="loading-dots">正在结合课程上下文精翻中...</span>`
-                  : this.escapeHtml(item.translation)
-              }
+              <div class="compare-pane target-pane">
+                <div class="pane-header">
+                  <span class="pane-badge target">🇨🇳 中文翻译对照</span>
+                </div>
+                <div class="card-translation">
+                  ${
+                    item.status === "translating" && !item.translation
+                      ? `<span class="loading-dots">正在生成实时双语对照翻译...</span>`
+                      : this.escapeHtml(item.translation)
+                  }
+                </div>
+              </div>
             </div>
 
             ${termsHtml}
@@ -947,7 +934,20 @@ class LectureTranslatorApp {
       })
       .join("");
 
-    // 绑定重点标记与重试按钮
+    // 绑定复制双语对照、标重点与重试按钮
+    container.querySelectorAll(".btn-copy-pair").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-id");
+        const target = this.transcriptList.find((i) => i.id === id);
+        if (target && navigator.clipboard) {
+          const textToCopy = `${target.source}\n${target.translation}`;
+          navigator.clipboard.writeText(textToCopy).then(() => {
+            this.showBannerNotice("已复制该句「原始语言 + 中文翻译」对照", "success");
+          });
+        }
+      });
+    });
+
     container.querySelectorAll(".btn-star").forEach((btn) => {
       btn.addEventListener("click", () => {
         const id = btn.getAttribute("data-id");
@@ -982,7 +982,7 @@ class LectureTranslatorApp {
     if (this.extractedTerms.length === 0) {
       listEl.innerHTML = `
         <div class="terms-empty">
-          同传过程中，Gemini 2.5 Flash 会自动提取教授提到的<strong>英文学术术语与中文释义</strong>并汇总于此，方便课后复习。
+          同传过程中，系统会自动提取教授提到的<strong>俄语 / 英语学术术语与中文释义对照</strong>并汇总于此，方便课后复习。
         </div>
       `;
       return;
@@ -1007,24 +1007,24 @@ class LectureTranslatorApp {
     }
 
     const dateStr = new Date().toISOString().slice(0, 10);
+    const langMeta = getLanguageMeta(this.settings.sourceLang);
     const lines = [
-      `# 🎓 留学课堂双语同传笔记 (${dateStr})`,
+      `# 🎓 留学课堂实时双语同传对照笔记 (${dateStr})`,
       ``,
+      `- **授课语言**：${langMeta.flag} ${langMeta.name}`,
       `- **课程专业领域**：${this.settings.courseSubject}`,
       `- **预设课件词汇**：${this.settings.glossaryKeywords || "无"}`,
-      `- **同传引擎**：Chrome Web Speech API + ${
-        TRANSLATION_PROVIDERS[this.settings.translationProvider]?.name
-      }`,
       ``
     ];
 
     const starredItems = this.transcriptList.filter((i) => i.starred);
     if (starredItems.length > 0) {
-      lines.push(`## ⭐ 课堂重点与考点汇总 (${starredItems.length} 处)`, ``);
+      lines.push(`## ⭐ 课堂重点与考点双语汇总 (${starredItems.length} 处)`, ``);
       starredItems.forEach((item) => {
         lines.push(
-          `- **[${item.timestamp}]** **${item.translation}**`,
-          `  - *原文*: ${item.correctedSource || item.source}`
+          `- **[${item.timestamp}]**`,
+          `  - **原始语言**: ${item.correctedSource || item.source}`,
+          `  - **中文翻译**: **${item.translation}**`
         );
       });
       lines.push(``);
@@ -1032,7 +1032,7 @@ class LectureTranslatorApp {
 
     if (this.extractedTerms.length > 0) {
       lines.push(`## 📘 本节课核心专业词汇表`, ``);
-      lines.push(`| 英文术语 (Term) | 中文释义 (Translation) |`);
+      lines.push(`| 原语专业术语 (Term) | 中文释义 (Translation) |`);
       lines.push(`| :--- | :--- |`);
       this.extractedTerms.forEach((t) => {
         lines.push(`| **${t.en}** | ${t.zh} |`);
@@ -1040,16 +1040,16 @@ class LectureTranslatorApp {
       lines.push(``);
     }
 
-    lines.push(`## 📝 完整课堂双语逐字稿 (${this.transcriptList.length} 句)`, ``);
+    lines.push(
+      `## 📝 完整课堂「原始语言 ⇄ 中文翻译」对照逐字稿 (${this.transcriptList.length} 句)`,
+      ``
+    );
     this.transcriptList.forEach((item) => {
       const starMark = item.starred ? " ⭐" : "";
       lines.push(
         `### [${item.timestamp}]${starMark}`,
-        `- **原文**：${item.source}`,
-        ...(item.correctedSource
-          ? [`- **AI 术语纠错**：${item.correctedSource}`]
-          : []),
-        `- **译文**：**${item.translation}**`,
+        `- **原始语言**：${item.source}`,
+        `- **中文翻译**：**${item.translation}**`,
         ``
       );
     });
@@ -1060,19 +1060,25 @@ class LectureTranslatorApp {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `Lecture_Notes_${dateStr}.md`;
+    a.download = `Lecture_Bilingual_Notes_${dateStr}.md`;
     a.click();
     URL.revokeObjectURL(url);
   }
 
   clearAllNotes() {
     if (this.transcriptList.length === 0) return;
-    if (!confirm("确定要清空当前保存的所有课堂双语记录吗？（建议先导出 Markdown 备份）")) {
+    if (
+      !confirm(
+        "确定要清空当前保存的所有课堂双语对照记录吗？（建议先导出 Markdown 备份）"
+      )
+    ) {
       return;
     }
     this.transcriptList = [];
+    this.lastCompletedPair = null;
     this.saveTranscript();
     this.renderTranscriptList();
+    this.handleInterimSpeech("");
   }
 
   showBannerNotice(message, type = "info") {
@@ -1083,7 +1089,7 @@ class LectureTranslatorApp {
     clearTimeout(this.bannerTimer);
     this.bannerTimer = setTimeout(() => {
       banner.className = "toast-banner hidden";
-    }, 4500);
+    }, 4000);
   }
 
   escapeHtml(str) {
@@ -1098,4 +1104,3 @@ class LectureTranslatorApp {
 window.addEventListener("DOMContentLoaded", () => {
   window.lectureApp = new LectureTranslatorApp();
 });
-

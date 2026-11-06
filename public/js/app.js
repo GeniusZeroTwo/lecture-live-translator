@@ -128,9 +128,38 @@ class LectureTranslatorApp {
     try {
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY_TRANSCRIPT));
       if (!Array.isArray(saved)) return [];
-      return saved.filter(
+      const valid = saved.filter(
         (item) => !/MYMEMORY WARNING/i.test(String(item?.translation || ""))
       );
+      // 自动把历史缓存中过短的单句/单词合并为完整自然段
+      const compacted = [];
+      for (const item of valid) {
+        const prev = compacted[compacted.length - 1];
+        const prevSrc = String(prev?.source || "").trim();
+        const prevWords = prevSrc.split(/\s+/).filter(Boolean).length;
+        const currSrc = String(item?.source || "").trim();
+        const currWords = currSrc.split(/\s+/).filter(Boolean).length;
+        if (
+          prev &&
+          prev.sourceLang === item.sourceLang &&
+          ((prevWords < 42 && prevSrc.length < 260) ||
+            (currWords < 14 && prevSrc.length < 450))
+        ) {
+          prev.source = `${prevSrc} ${currSrc}`.trim();
+          prev.correctedSource = "";
+          prev.translation = `${String(prev.translation || "").trim()} ${String(
+            item.translation || ""
+          ).trim()}`.trim();
+          prev.committedTranslation = prev.translation;
+          prev.starred = Boolean(prev.starred || item.starred);
+        } else {
+          compacted.push({
+            ...item,
+            committedTranslation: item.translation || ""
+          });
+        }
+      }
+      return compacted;
     } catch (_) {
       return [];
     }
@@ -550,6 +579,16 @@ class LectureTranslatorApp {
   }
 
   /**
+   * 判断最后一段话是否尚未满一段（未满 42 个词且未满 260 字符时继续合并在同一段内，绝不拆成一段一个词或一句话）
+   */
+  isParagraphStillOpen(item, usedSourceLang = this.settings.sourceLang) {
+    if (!item || item.sourceLang !== usedSourceLang) return false;
+    const src = String(item.source || "").trim();
+    const wordCount = src.split(/\s+/).filter(Boolean).length;
+    return wordCount < 42 && src.length < 260;
+  }
+
+  /**
    * 更新单一全文输出框末尾正在说话的实时双语对照段落节点
    */
   updateInlineLiveNodes() {
@@ -557,9 +596,11 @@ class LectureTranslatorApp {
     const liveSrcEl = document.getElementById("live-inline-source");
     const liveTgtEl = document.getElementById("live-inline-target");
     const unifiedFlow = document.getElementById("unified-lecture-flow");
+    const isEmbeddedInline =
+      liveSrcEl && liveSrcEl.getAttribute("data-inline-tail") === "1";
 
     if (liveBlockEl) {
-      if (this.liveInterimText) {
+      if (this.liveInterimText && !isEmbeddedInline) {
         liveBlockEl.classList.remove("hidden");
       } else {
         liveBlockEl.classList.add("hidden");
@@ -567,12 +608,18 @@ class LectureTranslatorApp {
     }
 
     if (liveSrcEl) {
-      liveSrcEl.textContent = this.liveInterimText || "";
+      liveSrcEl.textContent = this.liveInterimText
+        ? isEmbeddedInline
+          ? ` ${this.liveInterimText}`
+          : this.liveInterimText
+        : "";
     }
     if (liveTgtEl) {
-      liveTgtEl.textContent = this.liveInterimText
+      const liveTransText = this.liveInterimText
         ? this.liveInterimTranslation || "正在同步翻译..."
         : "";
+      liveTgtEl.textContent =
+        liveTransText && isEmbeddedInline ? ` ${liveTransText}` : liveTransText;
     }
     if (this.liveInterimText && unifiedFlow) {
       unifiedFlow.scrollTop = unifiedFlow.scrollHeight;
@@ -580,46 +627,79 @@ class LectureTranslatorApp {
   }
 
   /**
-   * 教授讲完一句后，无缝追加到整堂课连续全文流中
+   * 教授讲完一句后，智能合并进当前自然段（满一整段话后才开启下一段），彻底杜绝一段一个词或一句话
    */
   async handleFinalSpeechSegment(sourceText, meta = {}) {
     const cleanSource = String(sourceText || "").trim();
     if (!cleanSource) return;
 
     const usedSourceLang = meta.sourceLang || this.settings.sourceLang;
-    const itemId = `seg_${Date.now()}_${Math.random()
-      .toString(36)
-      .slice(2, 7)}`;
-    const timestamp = new Date().toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit"
-    });
-
     const initialPreview = this.liveInterimTranslation || "";
+    const lastItem = this.transcriptList[this.transcriptList.length - 1];
+    const newWords = cleanSource.split(/\s+/).filter(Boolean).length;
 
-    const newItem = {
-      id: itemId,
-      timestamp,
-      sourceLang: usedSourceLang,
-      source: cleanSource,
-      correctedSource: "",
-      translation: initialPreview,
-      terms: [],
-      status: "translating",
-      latencyMs: null,
-      starred: false
-    };
+    const shouldMerge =
+      meta.reason !== "manual-input" &&
+      lastItem &&
+      lastItem.sourceLang === usedSourceLang &&
+      (this.isParagraphStillOpen(lastItem, usedSourceLang) ||
+        ((newWords < 14 || cleanSource.length < 85) &&
+          String(lastItem.source || "").length < 480));
+
+    let targetId = "";
+    let currentTranslateSeq = 1;
+
+    if (shouldMerge) {
+      targetId = lastItem.id;
+      lastItem.source = `${String(lastItem.source || "").trim()} ${cleanSource}`.trim();
+      lastItem.correctedSource = "";
+      lastItem.status = "translating";
+      const baseTrans = String(
+        lastItem.committedTranslation || lastItem.translation || ""
+      ).trim();
+      if (initialPreview) {
+        lastItem.translation = baseTrans
+          ? `${baseTrans} ${initialPreview}`
+          : initialPreview;
+      }
+      lastItem.translateSeq = (lastItem.translateSeq || 0) + 1;
+      currentTranslateSeq = lastItem.translateSeq;
+    } else {
+      targetId = `seg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      const timestamp = new Date().toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit"
+      });
+      const newItem = {
+        id: targetId,
+        timestamp,
+        sourceLang: usedSourceLang,
+        source: cleanSource,
+        correctedSource: "",
+        translation: initialPreview,
+        committedTranslation: "",
+        terms: [],
+        status: "translating",
+        latencyMs: null,
+        starred: false,
+        translateSeq: 1
+      };
+      this.transcriptList.push(newItem);
+    }
 
     this.liveInterimText = "";
     this.liveInterimTranslation = "";
-    this.transcriptList.push(newItem);
     this.saveTranscript();
     this.renderTranscriptList(true);
     this.syncPiPWindow();
 
+    const targetItemBefore = this.transcriptList.find((i) => i.id === targetId);
+    if (!targetItemBefore) return;
+    const textToTranslate = targetItemBefore.source;
+
     const result = await translateLectureSegment({
-      text: cleanSource,
+      text: textToTranslate,
       courseSubject: this.settings.courseSubject,
       glossaryKeywords: this.settings.glossaryKeywords,
       sourceLang: usedSourceLang,
@@ -628,8 +708,8 @@ class LectureTranslatorApp {
       healthMonitor: this.healthMonitor
     });
 
-    const targetItem = this.transcriptList.find((i) => i.id === itemId);
-    if (!targetItem) return;
+    const targetItem = this.transcriptList.find((i) => i.id === targetId);
+    if (!targetItem || targetItem.translateSeq !== currentTranslateSeq) return;
 
     if (result.requiresPasscode) {
       this.openPasscodeModal(result.error);
@@ -638,6 +718,7 @@ class LectureTranslatorApp {
     if (result.ok) {
       targetItem.status = "done";
       targetItem.translation = result.translation;
+      targetItem.committedTranslation = result.translation;
       targetItem.correctedSource = result.correctedSource || "";
       targetItem.terms = result.terms || [];
       targetItem.latencyMs = result.latencyMs;
@@ -871,13 +952,40 @@ class LectureTranslatorApp {
         ? "utterance-side-by-side"
         : "utterance-stacked";
 
+    const lastItem = items[items.length - 1];
+    const embedLiveInLastParagraph =
+      Boolean(lastItem) &&
+      !this.filterStarredOnly &&
+      this.isParagraphStillOpen(lastItem, this.settings.sourceLang);
+
     const paragraphsHtml = items
-      .map((item) => {
+      .map((item, idx) => {
         const displaySrc = item.correctedSource || item.source || "";
         const displayTrans =
           item.status === "translating" && !item.translation
             ? "正在同步翻译..."
             : `${item.translation || ""}`;
+
+        const isLastAndOpen =
+          embedLiveInLastParagraph && idx === items.length - 1;
+
+        const inlineLiveSrcHtml = isLastAndOpen
+          ? `<span id="live-inline-source" data-inline-tail="1" class="utterance-source live-speaking">${
+              this.liveInterimText
+                ? ` ${this.escapeHtml(this.liveInterimText)}`
+                : ""
+            }</span>`
+          : "";
+
+        const inlineLiveTgtHtml = isLastAndOpen
+          ? `<span id="live-inline-target" data-inline-tail="1" class="utterance-target live-speaking-trans">${
+              this.liveInterimText
+                ? ` ${this.escapeHtml(
+                    this.liveInterimTranslation || "正在同步翻译..."
+                  )}`
+                : ""
+            }</span>`
+          : "";
 
         return `
           <div class="bilingual-utterance ${
@@ -885,14 +993,31 @@ class LectureTranslatorApp {
           }" data-id="${item.id}" title="[${
             item.timestamp
           }] 点击可标记/取消⭐课堂重点">
-            <div class="utterance-source">${this.escapeHtml(displaySrc)}</div>
+            <div class="utterance-source">${this.escapeHtml(displaySrc)}${inlineLiveSrcHtml}</div>
             <div class="utterance-target ${
               item.status === "error" ? "seg-error" : ""
-            }">${this.escapeHtml(displayTrans)}</div>
+            }">${this.escapeHtml(displayTrans)}${inlineLiveTgtHtml}</div>
           </div>
         `;
       })
       .join("");
+
+    const standaloneLiveBlockHtml = embedLiveInLastParagraph
+      ? ""
+      : `
+          <div id="live-inline-block" class="bilingual-utterance live-utterance ${
+            this.liveInterimText ? "" : "hidden"
+          }">
+            <div id="live-inline-source" class="utterance-source live-speaking">${this.escapeHtml(
+              this.liveInterimText || ""
+            )}</div>
+            <div id="live-inline-target" class="utterance-target live-speaking-trans">${this.escapeHtml(
+              this.liveInterimText
+                ? this.liveInterimTranslation || "正在同步翻译..."
+                : ""
+            )}</div>
+          </div>
+        `;
 
     container.innerHTML = `
       <div class="unified-lecture-box">
@@ -912,18 +1037,7 @@ class LectureTranslatorApp {
         <!-- 唯一全文输出框：所有段落的双语对照及实时正在讲的话全部在此同一个输出框内 -->
         <div id="unified-lecture-flow" class="unified-flow-body ${utteranceLayoutClass}">
           ${paragraphsHtml}
-          <div id="live-inline-block" class="bilingual-utterance live-utterance ${
-            this.liveInterimText ? "" : "hidden"
-          }">
-            <div id="live-inline-source" class="utterance-source live-speaking">${this.escapeHtml(
-              this.liveInterimText || ""
-            )}</div>
-            <div id="live-inline-target" class="utterance-target live-speaking-trans">${this.escapeHtml(
-              this.liveInterimText
-                ? this.liveInterimTranslation || "正在同步翻译..."
-                : ""
-            )}</div>
-          </div>
+          ${standaloneLiveBlockHtml}
           ${
             items.length === 0 && !this.liveInterimText
               ? `<div class="listening-placeholder">🎙️ 正在监听课堂声音，老师开口讲课时，每一段话的「${langMeta.name}原文 + 中文翻译对照」将在此同一个输出框内连续生成...</div>`

@@ -420,7 +420,7 @@ export class APIHealthMonitor {
 export class WebSpeechClassroomEngine {
   constructor({
     lang = "ru-RU",
-    maxWordsPerSegment = 24,
+    maxWordsPerSegment = 32,
     onInterim,
     onFinalSegment,
     onStateChange
@@ -434,8 +434,10 @@ export class WebSpeechClassroomEngine {
     this.recognition = null;
     this.shouldKeepRunning = false;
     this.reconnectCount = 0;
-    this.committedInterimOffset = 0;
     this.restartTimer = null;
+    this.silenceFlushTimer = null;
+    this.pendingFinalBuffer = "";
+    this.finalizedResultIndices = new Set();
   }
 
   get isSupported() {
@@ -445,6 +447,7 @@ export class WebSpeechClassroomEngine {
   }
 
   setLanguage(lang) {
+    this._flushPendingBuffer("lang-switch");
     this.lang = lang;
     if (this.recognition) {
       this.recognition.lang = lang;
@@ -465,13 +468,29 @@ export class WebSpeechClassroomEngine {
     }
 
     this.shouldKeepRunning = true;
-    this.committedInterimOffset = 0;
+    this.pendingFinalBuffer = "";
+    this.finalizedResultIndices = new Set();
     this._initAndStartInstance();
     return true;
   }
 
+  _flushPendingBuffer(reason = "paragraph-complete") {
+    clearTimeout(this.silenceFlushTimer);
+    this.silenceFlushTimer = null;
+    const textToFlush = this.pendingFinalBuffer.trim();
+    if (!textToFlush) return;
+    this.pendingFinalBuffer = "";
+    this.onInterim("");
+    this.onFinalSegment(textToFlush, {
+      reason,
+      sourceLang: this.lang
+    });
+  }
+
   _initAndStartInstance() {
     if (!this.shouldKeepRunning) return;
+
+    this.finalizedResultIndices = new Set();
 
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -499,21 +518,62 @@ export class WebSpeechClassroomEngine {
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i];
-        const transcript = result[0].transcript;
+        const transcript = (result[0]?.transcript || "").trim();
+        if (!transcript) continue;
 
         if (result.isFinal) {
-          const fullText = transcript.trim();
-          if (fullText.length > 0) {
-            this.onFinalSegment(fullText, { reason: "continuous" });
+          if (!this.finalizedResultIndices.has(i)) {
+            this.finalizedResultIndices.add(i);
+            this.pendingFinalBuffer = this.pendingFinalBuffer
+              ? `${this.pendingFinalBuffer} ${transcript}`
+              : transcript;
           }
-          this.onInterim("");
         } else {
-          interimTranscript += transcript;
+          interimTranscript += (interimTranscript ? " " : "") + transcript;
         }
       }
 
-      if (interimTranscript) {
-        this.onInterim(interimTranscript.trim());
+      const combinedLive = [this.pendingFinalBuffer, interimTranscript.trim()]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+
+      if (combinedLive) {
+        this.onInterim(combinedLive);
+      }
+
+      // 判断缓冲区是否已经累积成完整的一段话（防止变成一个词/短句就切段）
+      if (this.pendingFinalBuffer) {
+        const wordCount = this.pendingFinalBuffer
+          .split(/\s+/)
+          .filter(Boolean).length;
+        const charCount = this.pendingFinalBuffer.length;
+        const endsWithPunct = /[.?!。？！]$/.test(this.pendingFinalBuffer);
+
+        const isFullParagraph =
+          wordCount >= 32 ||
+          charCount >= 200 ||
+          ((wordCount >= 22 || charCount >= 140) &&
+            endsWithPunct &&
+            !interimTranscript);
+
+        if (isFullParagraph && !interimTranscript) {
+          this._flushPendingBuffer("paragraph-full");
+          // 当单次会话结果累积较多时，趁段落落盘瞬间静默重置识别器，防止 Chrome 后续碎片化吐词
+          if (event.results.length >= 10 && this.shouldKeepRunning) {
+            try {
+              this.recognition.stop();
+            } catch (_) {}
+          }
+          return;
+        }
+
+        // 若老师停顿超过 2.4 秒未继续说话，再将缓冲内容送交段落合并器
+        clearTimeout(this.silenceFlushTimer);
+        this.silenceFlushTimer = setTimeout(() => {
+          if (!this.pendingFinalBuffer) return;
+          this._flushPendingBuffer("pause-flush");
+        }, 2400);
       }
     };
 
@@ -545,7 +605,9 @@ export class WebSpeechClassroomEngine {
     };
 
     this.recognition.onend = () => {
-      this.committedInterimOffset = 0;
+      if (this.pendingFinalBuffer) {
+        this._flushPendingBuffer("session-end");
+      }
       if (this.shouldKeepRunning) {
         this.reconnectCount += 1;
         this.onStateChange({
@@ -560,7 +622,7 @@ export class WebSpeechClassroomEngine {
               this._initAndStartInstance();
             } catch (_) {}
           }
-        }, 150);
+        }, 100);
       } else {
         this.onStateChange({
           status: "standby",
@@ -574,42 +636,13 @@ export class WebSpeechClassroomEngine {
     } catch (_) {}
   }
 
-  /**
-   * 支持俄语与英语从句连接词的智能切分点查找
-   */
-  _findSmartSplitIndex(text, isRussian = false) {
-    const halfIdx = Math.floor(text.length * 0.5);
-    const tail = text.slice(halfIdx);
-
-    // 包含俄语常见从句连接词（потому что, который, однако, поэтому, хотя, чтобы, где, когда, если, то есть）与英语连词
-    const clauseRegex =
-      /([,.;?!—]\s+|\s+(?:потому что|так как|поскольку|который|которая|которое|которые|однако|поэтому|следовательно|кроме того|хотя|чтобы|где|когда|если|то есть|а также|because|which|that|however|therefore|moreover|although|while|so that|and then|where)\s+)/i;
-    const match = clauseRegex.exec(tail);
-
-    if (match) {
-      const cutPos = halfIdx + match.index + match[0].length;
-      return {
-        chunkText: text.slice(0, cutPos).trim(),
-        consumedLength: cutPos
-      };
-    }
-
-    const words = text.split(/\s+/);
-    const maxWords = isRussian ? 20 : 25;
-    const sliceWords = isRussian ? 15 : 19;
-    if (words.length >= maxWords) {
-      const chunkWords = words.slice(0, sliceWords).join(" ");
-      return {
-        chunkText: chunkWords,
-        consumedLength: chunkWords.length
-      };
-    }
-    return null;
-  }
-
   stop(silent = false) {
     this.shouldKeepRunning = false;
     clearTimeout(this.restartTimer);
+    clearTimeout(this.silenceFlushTimer);
+    if (this.pendingFinalBuffer) {
+      this._flushPendingBuffer("manual-stop");
+    }
     if (this.recognition) {
       try {
         this.recognition.stop();

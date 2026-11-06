@@ -193,6 +193,10 @@ export class FloatingSubtitlePiP {
     }
 
     if (flowBox) {
+      const wasScrolledUp =
+        flowBox.scrollHeight - flowBox.scrollTop - flowBox.clientHeight > 50;
+      const prevScrollTop = flowBox.scrollTop;
+
       const historyHtml = recentItems
         .map(
           (i) => `
@@ -224,7 +228,11 @@ export class FloatingSubtitlePiP {
           ? `${historyHtml}${liveHtml}`
           : "等待语音输入，每一段话的双语对照将在此同一输出框内连续生成...";
 
-      flowBox.scrollTop = flowBox.scrollHeight;
+      if (wasScrolledUp) {
+        flowBox.scrollTop = prevScrollTop;
+      } else {
+        flowBox.scrollTop = flowBox.scrollHeight;
+      }
     }
   }
 

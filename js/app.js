@@ -62,6 +62,8 @@ class LectureTranslatorApp {
     this.interimTransTimer = null;
     this.interimRequestSeq = 0;
     this.isSyncingScroll = false;
+    this.userScrolledUp = false;
+    this.savedScrollTop = 0;
 
     // 1. 初始化实时翻译健康监控中心
     this.healthMonitor = new APIHealthMonitor((healthState) => {
@@ -621,7 +623,7 @@ class LectureTranslatorApp {
       liveTgtEl.textContent =
         liveTransText && isEmbeddedInline ? ` ${liveTransText}` : liveTransText;
     }
-    if (this.liveInterimText && unifiedFlow) {
+    if (this.liveInterimText && unifiedFlow && !this.userScrolledUp) {
       unifiedFlow.scrollTop = unifiedFlow.scrollHeight;
     }
   }
@@ -923,6 +925,15 @@ class LectureTranslatorApp {
     const container = document.getElementById("transcript-feed");
     const countBadge = document.getElementById("transcript-count-badge");
 
+    // 重绘前记录用户当前是否已向上滑动浏览历史段落
+    const prevFlowEl = document.getElementById("unified-lecture-flow");
+    if (prevFlowEl) {
+      const distFromBottom =
+        prevFlowEl.scrollHeight - prevFlowEl.scrollTop - prevFlowEl.clientHeight;
+      this.userScrolledUp = distFromBottom > 65;
+      this.savedScrollTop = prevFlowEl.scrollTop;
+    }
+
     const items = this.filterStarredOnly
       ? this.transcriptList.filter((i) => i.starred)
       : this.transcriptList;
@@ -1089,8 +1100,21 @@ class LectureTranslatorApp {
       });
     }
 
-    if (scrollToBottom && unifiedFlowEl) {
-      unifiedFlowEl.scrollTop = unifiedFlowEl.scrollHeight;
+    if (unifiedFlowEl) {
+      unifiedFlowEl.addEventListener("scroll", () => {
+        const dist =
+          unifiedFlowEl.scrollHeight -
+          unifiedFlowEl.scrollTop -
+          unifiedFlowEl.clientHeight;
+        this.userScrolledUp = dist > 65;
+        this.savedScrollTop = unifiedFlowEl.scrollTop;
+      });
+
+      if (this.userScrolledUp || !scrollToBottom) {
+        unifiedFlowEl.scrollTop = this.savedScrollTop;
+      } else {
+        unifiedFlowEl.scrollTop = unifiedFlowEl.scrollHeight;
+      }
     }
   }
 

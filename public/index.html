@@ -130,10 +130,10 @@
       </div>
 
       <div class="field-group">
-        <label for="select-compare-layout">原文与译文对照排版</label>
+        <label for="select-compare-layout">整堂课对照排版</label>
         <select id="select-compare-layout">
-          <option value="side-by-side">◫ 左右双栏并排对照 (原始语言 ⇄ 中文翻译)</option>
-          <option value="stacked">☰ 上下双行对照 (原始语言 / 中文翻译)</option>
+          <option value="side-by-side">◫ 左右双栏全文对照 (左：整堂课原文 ⇄ 右：整堂课译文)</option>
+          <option value="stacked">☰ 上下全文连续对照 (上：整堂课原文 / 下：整堂课译文)</option>
         </select>
       </div>
 
@@ -166,52 +166,24 @@
     </div>
   </section>
 
-  <!-- 第一轨：实时语音流「原始语言 ⇄ 中文翻译」同步对照栏 -->
-  <section class="live-stream-bar">
-    <div class="live-stream-header">
-      <span id="live-stream-badge" class="stream-badge">待机</span>
-      <span class="stream-hint">第一轨：实时语音识别与中文翻译同步对照（老师说话过程中实时显示原始语言与同步译文，每讲完一句自动归档至下方笔记）</span>
-    </div>
-
-    <div class="live-compare-grid">
-      <!-- 左侧：实时识别原始语言 -->
-      <div class="live-compare-col source-col">
-        <div class="live-col-header">
-          <span id="live-source-lang-badge" class="lang-pill source">🇷🇺 原始语言实时识别 (俄语)</span>
-          <span id="live-word-count" class="live-meta-text">等待语音输入</span>
-        </div>
-        <div id="live-interim-stream" class="live-interim-box">
-          点击上方【开始课堂同传】或【模拟教授讲课测试】开始实时识别...
-        </div>
-      </div>
-
-      <!-- 右侧：实时同步中文翻译对照 -->
-      <div class="live-compare-col target-col">
-        <div class="live-col-header">
-          <span class="lang-pill target">🇨🇳 中文翻译实时同步对照</span>
-          <span id="live-trans-status" class="live-meta-text">边说边译已开启</span>
-        </div>
-        <div id="live-interim-translation" class="live-interim-box translation-preview">
-          说话时此处将实时同步显示中文翻译对照...
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- 主工作区：左侧双语对照笔记流 + 右侧实时提取学术词汇表 -->
+  <!-- 主工作区：左侧整堂课不间断双语全文对照 + 右侧实时提取学术词汇表 -->
   <main class="workspace-grid">
-    <!-- 左侧：第二轨 整句原始语言与中文翻译对照列表 -->
+    <!-- 左侧：整堂课连续全文「原始语言 ⇄ 中文翻译」实时同传面板 -->
     <section class="transcript-panel">
       <div class="panel-header">
         <div class="panel-title-group">
-          <h2>📝 课堂实时「原始语言 ⇄ 中文翻译」对照记录</h2>
-          <span id="transcript-count-badge" class="count-badge">已保存 0 句</span>
+          <h2>📝 整堂课实时双语同传全文对照</h2>
+          <span id="live-stream-badge" class="stream-badge">待机</span>
+          <span id="transcript-count-badge" class="count-badge">已识别 0 句</span>
         </div>
         <div class="panel-actions">
-          <button id="btn-filter-starred" class="panel-btn" title="只显示标记为⭐重点/考点的句子">
+          <button id="btn-copy-full-lecture" class="panel-btn" title="一键复制整堂课原始语言与中文翻译全文">
+            📋 复制整堂课双语全文
+          </button>
+          <button id="btn-filter-starred" class="panel-btn" title="只显示点击标记为⭐重点的内容">
             ⭐ 只看重点
           </button>
-          <button id="btn-export-md" class="panel-btn primary" title="将原始语言与中文翻译对照记录、重点及词汇表一键导出为 Markdown 笔记">
+          <button id="btn-export-md" class="panel-btn primary" title="将整堂课原始语言与中文翻译全文及词汇表一键导出为 Markdown 笔记">
             📥 导出双语 Markdown 笔记
           </button>
           <button id="btn-clear-notes" class="panel-btn danger" title="清空当前课堂记录">
@@ -220,17 +192,17 @@
         </div>
       </div>
 
-      <!-- 双语对照卡片滚动列表 -->
-      <div id="transcript-feed" class="transcript-feed"></div>
+      <!-- 整堂课连续全文对照视图（不分碎卡片，整堂课原文与整堂课译文连续自然追加） -->
+      <div id="transcript-feed" class="transcript-feed continuous-mode"></div>
 
-      <!-- 底部手动补充/粘贴课件句子快速翻译框 -->
+      <!-- 底部手动补充/粘贴课件句子快速追加翻译框 -->
       <form id="manual-input-form" class="manual-input-bar">
         <input
           id="manual-sentence-input"
           type="text"
-          placeholder="💡 也可以直接粘贴课件 PPT 上的俄语 / 英语等长难句按回车，立即生成「原始语言 + 中文翻译」对照..."
+          placeholder="💡 也可以直接粘贴课件 PPT 上的俄语 / 英语段落按回车，直接追加进整堂课双语同传流..."
         />
-        <button type="submit" class="manual-submit-btn">立即对照翻译</button>
+        <button type="submit" class="manual-submit-btn">追加翻译</button>
       </form>
     </section>
 

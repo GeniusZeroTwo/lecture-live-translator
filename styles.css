@@ -627,7 +627,133 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-height: calc(100vh - 380px);
+  max-height: calc(100vh - 280px);
+}
+
+.transcript-feed.continuous-mode {
+  padding: 12px 14px;
+  overflow: hidden;
+  max-height: calc(100vh - 240px);
+  min-height: 460px;
+}
+
+/* 整堂课不间断双语全文流看板 */
+.continuous-lecture-board {
+  display: grid;
+  gap: 14px;
+  flex: 1;
+  min-height: 430px;
+  height: 100%;
+  overflow: hidden;
+}
+
+.continuous-lecture-board.board-side-by-side {
+  grid-template-columns: 1fr 1fr;
+}
+
+.continuous-lecture-board.board-stacked {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+.continuous-column {
+  display: flex;
+  flex-direction: column;
+  background: rgba(11, 17, 32, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 12px;
+  overflow: hidden;
+  min-height: 200px;
+}
+
+.continuous-column.source-column {
+  border-top: 3px solid rgba(56, 189, 248, 0.75);
+}
+
+.continuous-column.target-column {
+  border-top: 3px solid rgba(16, 185, 129, 0.8);
+}
+
+.continuous-col-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 14px;
+  background: rgba(15, 23, 42, 0.9);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  flex-shrink: 0;
+}
+
+.col-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.continuous-flow-body {
+  flex: 1;
+  padding: 16px 18px;
+  overflow-y: auto;
+  font-size: 16px;
+  line-height: 1.85;
+  color: var(--text-primary);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.source-column .continuous-flow-body {
+  color: #e2e8f0;
+  font-size: 15.5px;
+}
+
+.target-column .continuous-flow-body {
+  color: #f8fafc;
+  font-size: 16.5px;
+  font-weight: 500;
+}
+
+.flow-seg {
+  display: inline;
+  padding: 2px 3px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.flow-seg:hover,
+.flow-seg.hovered {
+  background: rgba(56, 189, 248, 0.22);
+  color: #ffffff;
+}
+
+.target-column .flow-seg:hover,
+.target-column .flow-seg.hovered {
+  background: rgba(16, 185, 129, 0.24);
+  color: #ffffff;
+}
+
+.flow-seg.starred {
+  background: rgba(245, 158, 11, 0.2);
+  border-bottom: 2px solid #f59e0b;
+  color: #fde68a;
+}
+
+.flow-seg.live-speaking {
+  color: #7dd3fc;
+  background: rgba(56, 189, 248, 0.12);
+  border-bottom: 1px dashed rgba(56, 189, 248, 0.65);
+}
+
+.flow-seg.live-speaking-trans {
+  color: #6ee7b7;
+  background: rgba(16, 185, 129, 0.12);
+  border-bottom: 1px dashed rgba(16, 185, 129, 0.65);
+}
+
+.listening-placeholder {
+  color: var(--text-muted);
+  font-size: 14px;
+  font-style: italic;
 }
 
 .empty-state {
@@ -1107,5 +1233,9 @@ body {
   }
   .bilingual-compare-box.compare-side-by-side {
     grid-template-columns: 1fr;
+  }
+  .continuous-lecture-board.board-side-by-side {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr 1fr;
   }
 }

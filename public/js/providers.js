@@ -503,13 +503,8 @@ export class WebSpeechClassroomEngine {
 
         if (result.isFinal) {
           const fullText = transcript.trim();
-          const remaining = fullText
-            .slice(this.committedInterimOffset)
-            .trim();
-          this.committedInterimOffset = 0;
-
-          if (remaining.length > 1) {
-            this.onFinalSegment(remaining, { reason: "vad-final" });
+          if (fullText.length > 0) {
+            this.onFinalSegment(fullText, { reason: "continuous" });
           }
           this.onInterim("");
         } else {
@@ -518,31 +513,7 @@ export class WebSpeechClassroomEngine {
       }
 
       if (interimTranscript) {
-        const activeInterim = interimTranscript
-          .slice(this.committedInterimOffset)
-          .trim();
-
-        // 俄语单词较长且无冠词，20词即可触发智能从句切分；英语等为26词
-        const isRussian = String(this.lang).toLowerCase().startsWith("ru");
-        const threshold = isRussian ? 20 : this.maxWordsPerSegment;
-        const words = activeInterim.split(/\s+/).filter(Boolean);
-
-        if (words.length >= threshold) {
-          const splitChunk = this._findSmartSplitIndex(activeInterim, isRussian);
-          if (splitChunk) {
-            this.committedInterimOffset += splitChunk.consumedLength;
-            this.onFinalSegment(splitChunk.chunkText, {
-              reason: "long-clause-split"
-            });
-            const rest = interimTranscript
-              .slice(this.committedInterimOffset)
-              .trim();
-            this.onInterim(rest);
-            return;
-          }
-        }
-
-        this.onInterim(activeInterim);
+        this.onInterim(interimTranscript.trim());
       }
     };
 

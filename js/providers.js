@@ -293,49 +293,82 @@ export class APIHealthMonitor {
   }
 
   /**
-   * 探测实时翻译引擎连通性与延迟（无需任何 API Key）
+   * 探测实时翻译引擎连通性与访问密码状态
    */
-  async probeHealth() {
+  async probeHealth({ passcode = "" } = {}) {
     this.updateTranslation({
       status: "checking",
       statusText: "正在检测延迟..."
     });
 
     const startTime = Date.now();
+    const cleanPasscode = String(passcode || "").trim();
 
     // 1. 先检查是否存在 Cloudflare Pages Functions 边缘环境
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 2500);
+      const timeout = setTimeout(() => controller.abort(), 3000);
       const res = await fetch("/api/health?ping=1", {
+        headers: cleanPasscode ? { "X-Access-Passcode": cleanPasscode } : {},
         signal: controller.signal
       });
       clearTimeout(timeout);
 
-      if (res.ok) {
-        const data = await res.json();
-        if (data && data.edge?.active) {
-          const latency = data.upstream?.latencyMs || Date.now() - startTime;
-          const envLabel =
-            data.serverConfig?.label || "Cloudflare 边缘同传节点";
-          this.updateEdge({
-            checked: true,
-            active: true,
-            hasCustomEnvApi: Boolean(data.serverConfig?.hasCustomEnvApi),
-            colo: data.edge.colo || "CF-EDGE",
-            modeLabel: `${envLabel} · 节点 ${data.edge.colo || "GLOBAL"}`
-          });
+      const data = await res.json().catch(() => ({}));
+      if (data && data.edge?.active) {
+        const requiresPasscode = Boolean(data.serverConfig?.requiresPasscode);
+        const passcodeVerified = Boolean(data.serverConfig?.passcodeVerified);
+        const envLabel =
+          data.serverConfig?.label || "Cloudflare 边缘同传节点";
+
+        this.updateEdge({
+          checked: true,
+          active: true,
+          hasCustomEnvApi: Boolean(data.serverConfig?.hasCustomEnvApi),
+          requiresPasscode,
+          passcodeVerified,
+          colo: data.edge.colo || "CF-EDGE",
+          modeLabel: `${envLabel} · 节点 ${data.edge.colo || "GLOBAL"}${
+            requiresPasscode
+              ? passcodeVerified
+                ? " · 🔓 密码已解锁"
+                : " · 🔒 需输入访问密码"
+              : ""
+          }`
+        });
+
+        if (requiresPasscode && !passcodeVerified) {
           this.updateTranslation({
-            status: "healthy",
-            statusText: `${
-              data.serverConfig?.hasCustomEnvApi ? data.serverConfig.provider.toUpperCase() : "在线就绪"
-            } (${latency}ms)`,
-            lastLatencyMs: latency,
-            lastCheckedAt: new Date().toLocaleTimeString(),
-            lastError: ""
+            status: "degraded",
+            statusText: "🔒 待输入访问密码",
+            lastError:
+              data.error || "当前站点已启用访问密码保护，请输入正确的访问密码"
           });
-          return { ok: true, latencyMs: latency, via: "cloudflare-edge" };
+          return {
+            ok: false,
+            requiresPasscode: true,
+            error: data.error || "需要输入正确的访问密码"
+          };
         }
+
+        const latency = data.upstream?.latencyMs || Date.now() - startTime;
+        this.updateTranslation({
+          status: "healthy",
+          statusText: `${
+            data.serverConfig?.hasCustomEnvApi
+              ? data.serverConfig.provider.toUpperCase()
+              : "在线就绪"
+          } (${latency}ms)`,
+          lastLatencyMs: latency,
+          lastCheckedAt: new Date().toLocaleTimeString(),
+          lastError: ""
+        });
+        return {
+          ok: true,
+          latencyMs: latency,
+          via: "cloudflare-edge",
+          requiresPasscode
+        };
       }
     } catch (_) {
       // 本地或纯静态环境，走浏览器直连翻译通道
@@ -654,28 +687,37 @@ async function fetchZeroConfigTranslation(
 
   const startTime = Date.now();
 
-  // 1. 整句精翻模式 (standard) 优先请求 Cloudflare `/api/translate` 边缘接口，以使用后台「变量和密钥」环境变量配置的 API 选项
+  // 1. 整句精翻模式 (standard) 优先请求 Cloudflare `/api/translate` 边缘接口，以使用后台「变量和密钥」环境变量配置的 API 选项与访问密码校验
   if (mode === "standard") {
+    let passcodeBlockedError = "";
     try {
+      const cleanPasscode = String(extraMeta.passcode || "").trim();
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 6500);
       const res = await fetch("/api/translate", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(cleanPasscode ? { "X-Access-Passcode": cleanPasscode } : {})
+        },
         body: JSON.stringify({
           text: cleanText,
           sourceLang,
           targetLang,
           courseSubject: extraMeta.courseSubject || "",
           glossaryKeywords: extraMeta.glossaryKeywords || "",
+          passcode: cleanPasscode,
           mode
         }),
         signal: controller.signal
       });
       clearTimeout(timer);
 
-      if (res.ok) {
-        const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401 || data?.requiresPasscode) {
+        passcodeBlockedError =
+          data?.error || "需要输入正确的访问密码才能使用同传翻译服务";
+      } else if (res.ok) {
         const parsed = parseStructuredTranslation(
           data.text || data.translation || ""
         );
@@ -696,6 +738,11 @@ async function fetchZeroConfigTranslation(
       }
     } catch (_) {
       // 若本地静态运行无 /api/translate 则自动向下走直连通道
+    }
+    if (passcodeBlockedError) {
+      const err = new Error(passcodeBlockedError);
+      err.requiresPasscode = true;
+      throw err;
     }
   }
 
@@ -803,6 +850,7 @@ export async function translateLectureSegment({
   glossaryKeywords = "",
   sourceLang = "ru-RU",
   targetLang = "简体中文",
+  passcode = "",
   healthMonitor
 }) {
   if (healthMonitor) {
@@ -816,7 +864,7 @@ export async function translateLectureSegment({
       sourceLang,
       targetLang,
       "standard",
-      { courseSubject, glossaryKeywords }
+      { courseSubject, glossaryKeywords, passcode }
     );
 
     const latencyMs = res.latencyMs || Date.now() - startTime;
@@ -850,10 +898,14 @@ export async function translateLectureSegment({
   } catch (err) {
     const latencyMs = Date.now() - startTime;
     if (healthMonitor) {
-      healthMonitor.recordTranslationError(500, err.message || String(err));
+      healthMonitor.recordTranslationError(
+        err.requiresPasscode ? 401 : 500,
+        err.message || String(err)
+      );
     }
     return {
       ok: false,
+      requiresPasscode: Boolean(err.requiresPasscode),
       latencyMs,
       error: err.message || String(err)
     };

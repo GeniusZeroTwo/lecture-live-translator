@@ -84,6 +84,21 @@ function normalizeOpenAIEndpoint(rawUrl, fallbackUrl) {
 }
 
 /**
+ * 解析 Cloudflare「变量和密钥」中的访问密码环境变量
+ * 支持变量名：ACCESS_PASSWORD | ACCESS_PASSCODE | PASSWORD | PASSCODE | SITE_PASSWORD | AUTH_PASSWORD
+ */
+export function resolveAccessPassword(env) {
+  return getEnvCaseInsensitive(env, [
+    "ACCESS_PASSWORD",
+    "ACCESS_PASSCODE",
+    "PASSWORD",
+    "PASSCODE",
+    "SITE_PASSWORD",
+    "AUTH_PASSWORD"
+  ]);
+}
+
+/**
  * 解析 Cloudflare「变量和密钥」中的 API 配置选项
  */
 export function resolveEnvApiConfig(env) {
@@ -464,7 +479,7 @@ export async function onRequest(context) {
   const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type, X-Access-Passcode",
     "Content-Type": "application/json; charset=utf-8"
   };
 
@@ -490,8 +505,28 @@ export async function onRequest(context) {
       systemPrompt = "",
       userPrompt = "",
       mode = "standard",
-      temperature = 0.15
+      temperature = 0.15,
+      passcode = ""
     } = body;
+
+    // 校验访问密码变量 (ACCESS_PASSWORD / ACCESS_PASSCODE / PASSWORD)
+    const serverPasscode = resolveAccessPassword(env);
+    const clientPasscode = (
+      request.headers.get("X-Access-Passcode") ||
+      passcode ||
+      ""
+    ).trim();
+
+    if (serverPasscode && clientPasscode !== serverPasscode) {
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          requiresPasscode: true,
+          error: "需要正确的访问密码才能使用同传服务，请点击右上角【🔒 访问密码】输入口令"
+        }),
+        { status: 401, headers: corsHeaders }
+      );
+    }
 
     const rawSourceText =
       String(text || "").trim() ||

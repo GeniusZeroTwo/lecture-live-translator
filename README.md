@@ -29,6 +29,7 @@
 | **`API_PROVIDER`** | *(可选)* 显式指定 API 服务商选项：<br>`gemini` \| `glm` \| `siliconflow` \| `deepseek` \| `openai` \| `custom` \| `free` |
 | **`API_MODEL`** | *(可选)* 指定具体模型名称，例如：<br>• Gemini: `gemini-2.5-flash` 或 `gemini-2.5-flash-lite`<br>• 智谱: `glm-4-flash`<br>• 硅基流动: `Qwen/Qwen2.5-7B-Instruct`<br>• DeepSeek: `deepseek-chat` |
 | **`API_BASE_URL`** | *(可选)* 自定义 API 代理或第三方 OpenAI 兼容接口地址（如填入域名将自动补全 `/v1/chat/completions`） |
+| **`ACCESS_PASSWORD`** | *(可选)* **访问密码保护变量**（也兼容填写变量名 **`ACCESS_PASSCODE`** 或 **`PASSWORD`**）。配置后，打开网页需输入正确访问密码才能调用云端同传接口，防止他人盗刷你的 API 额度 |
 
 ### 方式 B：直接按服务商专属变量名添加
 你也可以直接在「变量和密钥」中添加以下任意一个变量名：

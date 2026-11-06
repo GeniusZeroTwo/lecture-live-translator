@@ -8,10 +8,11 @@ pages_build_output_dir = "public"
 # ==============================================================================
 #
 # 【方式一：通用环境变量配置（最简单，填入任意一家 API Key 自动识别）】
-# API_KEY       = "你的密钥"            # 自动识别 AIza...(Gemini) / id.secret(智谱GLM) / sk-...(SiliconFlow/DeepSeek/OpenAI)
-# API_PROVIDER  = "gemini"              # 可选：gemini | glm | siliconflow | deepseek | openai | custom | free
-# API_MODEL     = "gemini-2.5-flash"    # 可选：自定义模型名称（如 glm-4-flash, Qwen/Qwen2.5-7B-Instruct, deepseek-chat）
-# API_BASE_URL  = ""                    # 可选：自定义 API 代理或第三方 OpenAI 兼容接口地址
+# API_KEY         = "你的密钥"          # 自动识别 AIza...(Gemini) / id.secret(智谱GLM) / sk-...(SiliconFlow/DeepSeek/OpenAI)
+# API_PROVIDER    = "gemini"            # 可选：gemini | glm | siliconflow | deepseek | openai | custom | free
+# API_MODEL       = "gemini-2.5-flash"  # 可选：自定义模型名称（如 glm-4-flash, Qwen/Qwen2.5-7B-Instruct, deepseek-chat）
+# API_BASE_URL    = ""                  # 可选：自定义 API 代理或第三方 OpenAI 兼容接口地址
+# ACCESS_PASSWORD = "你的自定义访问密码" # 可选：设置网页访问密码保护（兼容 ACCESS_PASSCODE / PASSWORD 变量名），防止他人盗刷额度
 #
 # 【方式二：按服务商专属变量名配置】
 # GEMINI_API_KEY      = "AIzaSy..."     # Google Gemini API 密钥

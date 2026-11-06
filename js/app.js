@@ -107,7 +107,8 @@ class LectureTranslatorApp {
       compareLayout: "side-by-side", // side-by-side | stacked
       courseSubject: "计算机科学与人工智能 (Computer Science & AI)",
       glossaryKeywords: "",
-      farFieldMic: true
+      farFieldMic: true,
+      passcode: ""
     };
     try {
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY_SETTINGS));
@@ -294,6 +295,80 @@ class LectureTranslatorApp {
         this.audioGuardian.acquireWakeLock();
       }
     });
+
+    this.initPasscodeModal();
+  }
+
+  initPasscodeModal() {
+    const modal = document.getElementById("passcode-modal");
+    const openBtn = document.getElementById("btn-open-passcode");
+    const closeBtn = document.getElementById("btn-close-passcode");
+    const form = document.getElementById("passcode-form");
+    const input = document.getElementById("input-access-passcode");
+    const feedback = document.getElementById("passcode-feedback");
+
+    if (!modal || !form || !input) return;
+
+    if (openBtn) {
+      openBtn.addEventListener("click", () => {
+        this.openPasscodeModal();
+      });
+    }
+
+    if (closeBtn) {
+      closeBtn.addEventListener("click", () => {
+        modal.classList.add("hidden");
+      });
+    }
+
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) modal.classList.add("hidden");
+    });
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      this.settings.passcode = input.value.trim();
+      this.saveSettings();
+
+      if (feedback) {
+        feedback.textContent = "⏳ 正在验证访问密码...";
+        feedback.className = "modal-feedback checking";
+      }
+
+      const res = await this.healthMonitor.probeHealth({
+        passcode: this.settings.passcode
+      });
+
+      if (res.ok) {
+        if (feedback) {
+          feedback.textContent = "✅ 访问密码验证通过！";
+          feedback.className = "modal-feedback success";
+        }
+        setTimeout(() => {
+          modal.classList.add("hidden");
+        }, 400);
+        this.showBannerNotice("🔓 访问密码验证成功，同传服务已解锁", "success");
+      } else {
+        if (feedback) {
+          feedback.textContent = `❌ ${res.error || "访问密码不正确，请重试"}`;
+          feedback.className = "modal-feedback error";
+        }
+      }
+    });
+  }
+
+  openPasscodeModal(message = "") {
+    const modal = document.getElementById("passcode-modal");
+    const input = document.getElementById("input-access-passcode");
+    const feedback = document.getElementById("passcode-feedback");
+    if (!modal) return;
+    if (input) input.value = this.settings.passcode || "";
+    if (feedback) {
+      feedback.textContent = message;
+      feedback.className = message ? "modal-feedback error" : "modal-feedback";
+    }
+    modal.classList.remove("hidden");
+    setTimeout(() => input?.focus(), 60);
   }
 
   setSourceLanguage(langCode) {
@@ -321,10 +396,16 @@ class LectureTranslatorApp {
   }
 
   async runInitialHealthProbe(showToast = false) {
-    const res = await this.healthMonitor.probeHealth();
+    const res = await this.healthMonitor.probeHealth({
+      passcode: this.settings.passcode
+    });
+    if (res.requiresPasscode && !res.ok) {
+      this.openPasscodeModal("🔒 当前站点已设置访问密码保护，请输入密码解锁");
+      return;
+    }
     if (showToast && res.ok) {
       this.showBannerNotice(
-        `实时翻译通道连通正常：响应延迟 ${res.latencyMs}ms（免配置已就绪）`,
+        `实时翻译通道连通正常：响应延迟 ${res.latencyMs}ms`,
         "success"
       );
     }
@@ -551,11 +632,16 @@ class LectureTranslatorApp {
       glossaryKeywords: this.settings.glossaryKeywords,
       sourceLang: usedSourceLang,
       targetLang: this.settings.targetLang,
+      passcode: this.settings.passcode,
       healthMonitor: this.healthMonitor
     });
 
     const targetItem = this.transcriptList.find((i) => i.id === itemId);
     if (!targetItem) return;
+
+    if (result.requiresPasscode) {
+      this.openPasscodeModal(result.error);
+    }
 
     if (result.ok) {
       targetItem.status = "done";
@@ -601,8 +687,13 @@ class LectureTranslatorApp {
       glossaryKeywords: this.settings.glossaryKeywords,
       sourceLang: targetItem.sourceLang || this.settings.sourceLang,
       targetLang: this.settings.targetLang,
+      passcode: this.settings.passcode,
       healthMonitor: this.healthMonitor
     });
+
+    if (result.requiresPasscode) {
+      this.openPasscodeModal(result.error);
+    }
 
     if (result.ok) {
       targetItem.status = "done";

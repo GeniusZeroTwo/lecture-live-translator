@@ -1,8 +1,8 @@
 /**
  * Cloudflare Pages / Workers Function: /api/health
- * 检测 Cloudflare 边缘节点状态、后台「变量和密钥」环境变量 API 选项配置以及上游翻译连通性
+ * 检测 Cloudflare 边缘节点状态、后台「变量和密钥」环境变量 API 选项、访问密码变量以及上游翻译连通性
  */
-import { resolveEnvApiConfig } from "./translate.js";
+import { resolveEnvApiConfig, resolveAccessPassword } from "./translate.js";
 
 export async function onRequest(context) {
   const { request, env } = context;
@@ -10,7 +10,7 @@ export async function onRequest(context) {
   const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type, X-Access-Passcode",
     "Content-Type": "application/json; charset=utf-8"
   };
 
@@ -25,6 +25,15 @@ export async function onRequest(context) {
   const envApiConfig = resolveEnvApiConfig(env);
   const hasCustomEnvApi = Boolean(envApiConfig.provider !== "free" && envApiConfig.key);
 
+  const serverPasscode = resolveAccessPassword(env);
+  const requiresPasscode = Boolean(serverPasscode);
+  const clientPasscode = (
+    request.headers.get("X-Access-Passcode") ||
+    url.searchParams.get("passcode") ||
+    ""
+  ).trim();
+  const passcodeVerified = !requiresPasscode || clientPasscode === serverPasscode;
+
   const responsePayload = {
     ok: true,
     edge: {
@@ -37,18 +46,34 @@ export async function onRequest(context) {
       hasCustomEnvApi,
       provider: envApiConfig.provider,
       model: envApiConfig.model,
-      label: envApiConfig.label
+      label: envApiConfig.label,
+      requiresPasscode,
+      passcodeVerified
     },
     upstream: {
-      ok: true,
-      status: 200,
+      ok: passcodeVerified,
+      status: passcodeVerified ? 200 : 401,
       latencyMs: 65,
       provider: envApiConfig.provider,
       model: envApiConfig.model,
       displayName: envApiConfig.label,
-      message: `${envApiConfig.label} 在线就绪`
+      message: passcodeVerified
+        ? `${envApiConfig.label} 在线就绪`
+        : "受访问密码保护，请输入正确的访问密码解锁"
     }
   };
+
+  if (requiresPasscode && !passcodeVerified && checkUpstream) {
+    return new Response(
+      JSON.stringify({
+        ...responsePayload,
+        ok: false,
+        requiresPasscode: true,
+        error: "访问密码不正确或尚未输入，请先输入访问密码解锁"
+      }),
+      { status: 401, headers: corsHeaders }
+    );
+  }
 
   if (checkUpstream) {
     const startTime = Date.now();
@@ -105,7 +130,6 @@ export async function onRequest(context) {
         }
       }
 
-      // 默认或降级探测内置免密实时神经翻译通道
       const testUrl =
         "https://translate.googleapis.com/translate_a/single?client=gtx&sl=ru&tl=zh-CN&dt=t&dj=1&q=%D0%9F%D1%80%D0%B8%D0%B2%D0%B5%D1%82";
       const upstreamRes = await fetch(testUrl, { method: "GET" });

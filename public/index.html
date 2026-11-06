@@ -49,6 +49,9 @@
       <button id="btn-toggle-health-panel" class="nav-btn ghost" title="展开/收起运行监控详情">
         📊 运行状态
       </button>
+      <button id="btn-open-passcode" class="nav-btn ghost" title="输入或修改访问密码（若后台配置了 ACCESS_PASSWORD / ACCESS_PASSCODE）">
+        🔒 访问密码
+      </button>
     </div>
   </header>
 
@@ -255,15 +258,45 @@
           </div>
           <div class="slot-item">
             <div class="slot-top">
-              <strong>⚡ 免配置开箱即用</strong>
-              <span class="slot-tag ready">零密钥</span>
+              <strong>🔐 后台环境变量控制</strong>
+              <span class="slot-tag ready">安全托管</span>
             </div>
-            <p>内置免密多通道实时神经翻译引擎，无需在网页或后台配置任何 API Key 即可直接同传</p>
+            <p>支持通过后台环境变量配置 API 选项与 <code>ACCESS_PASSWORD</code> 访问密码保护，前台不暴露任何 API 密钥接口</p>
           </div>
         </div>
       </div>
     </aside>
   </main>
+
+  <!-- 访问密码验证弹窗（仅用于输入访问口令，不含任何 API Key 添加接口） -->
+  <div id="passcode-modal" class="modal-backdrop hidden">
+    <div class="modal-card compact-modal">
+      <div class="modal-header">
+        <h3>🔒 输入课堂同传访问密码</h3>
+        <button id="btn-close-passcode" class="modal-close-btn">✕</button>
+      </div>
+      <form id="passcode-form" class="modal-body">
+        <div class="form-row">
+          <label for="input-access-passcode">访问密码 (对应后台环境变量 <code>ACCESS_PASSWORD</code> / <code>ACCESS_PASSCODE</code>)</label>
+          <input
+            id="input-access-passcode"
+            type="password"
+            placeholder="请输入访问密码..."
+            autocomplete="current-password"
+          />
+          <p class="field-hint">
+            提示：密码验证通过后将保存在当前浏览器中，下次打开自动解锁。
+          </p>
+        </div>
+        <div id="passcode-feedback" class="modal-feedback"></div>
+        <div class="modal-footer">
+          <button type="submit" class="primary-start-btn compact">
+            🔓 验证并解锁
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
 
   <script type="module" src="./js/app.js"></script>
 </body>

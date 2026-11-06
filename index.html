@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ClassSync AI · 留学课堂实时同传助手</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <!-- 顶部浮动消息提醒 -->
+  <div id="top-toast-banner" class="toast-banner hidden"></div>
+
+  <!-- 顶部主导航与实时 API 健康监控栏 -->
+  <header class="top-navbar">
+    <div class="brand-group">
+      <div class="brand-logo">🎓</div>
+      <div>
+        <h1 class="brand-title">ClassSync AI <span class="version-pill">方案一 · 留学课堂版</span></h1>
+        <p class="brand-subtitle">Chrome 内置语音识别 + Gemini 2.5 Flash 学术语境精翻</p>
+      </div>
+    </div>
+
+    <!-- 核心 API 健康状态胶囊栏 -->
+    <div class="health-status-bar">
+      <!-- 1. 语音识别 ASR 健康状态 -->
+      <div class="health-pill" title="Chrome Web Speech API 实时状态与静音自动续接">
+        <span id="health-asr-dot" class="status-dot neutral"></span>
+        <span id="health-asr-text">ASR: 待机中</span>
+      </div>
+
+      <!-- 2. 翻译大模型 API 健康状态与延迟 -->
+      <div class="health-pill" title="翻译大模型连通状态与最近一次响应延迟">
+        <span id="health-llm-dot" class="status-dot warning"></span>
+        <span id="health-llm-text">Gemini 2.5 Flash: 待检测</span>
+      </div>
+
+      <!-- 3. 免费额度 RPM 实时仪表 -->
+      <div class="health-pill rpm-pill" title="当前每分钟请求数 / 免费层限额 (RPM)">
+        <span class="rpm-label">免费额度速率:</span>
+        <div class="mini-meter">
+          <div id="health-rpm-bar" class="meter-fill ok" style="width: 0%"></div>
+        </div>
+        <span id="health-rpm-value" class="rpm-text">0 / 15 RPM</span>
+      </div>
+
+      <!-- 4. 课堂远场麦克风实时电平 -->
+      <div class="health-pill mic-pill" title="课堂麦克风实时音量电平（说话时条会跳动）">
+        <span>🎙️ 电平:</span>
+        <div class="mini-meter">
+          <div id="mic-volume-bar" class="meter-fill mic" style="width: 0%"></div>
+        </div>
+        <span id="mic-volume-text" class="rpm-text">待机</span>
+      </div>
+
+      <button id="btn-ping-health" class="nav-btn ghost" title="立即发送探测包检测 API 密钥与延迟">
+        🩺 诊断连通性
+      </button>
+      <button id="btn-toggle-health-panel" class="nav-btn ghost" title="展开/收起详细 API 健康监控面板">
+        📊 监控详情
+      </button>
+      <button id="btn-open-settings" class="nav-btn accent">
+        ⚙️ API 配置
+      </button>
+    </div>
+  </header>
+
+  <!-- 可折叠的 API 健康状态与多引擎监控详情抽屉 -->
+  <section id="health-detail-drawer" class="health-drawer">
+    <div class="health-grid">
+      <div class="health-card">
+        <div class="health-card-title">🎙️ 语音识别引擎 (ASR)</div>
+        <div class="health-card-main">Web Speech API (Chrome 内置)</div>
+        <div class="health-sub">
+          状态: <strong id="detail-asr-status">待机中</strong> · 
+          <span id="detail-asr-reconnect">0 次静音自动续接</span>
+        </div>
+      </div>
+
+      <div class="health-card">
+        <div class="health-card-title">🧠 实时翻译引擎 (LLM / MT)</div>
+        <div class="health-card-main">
+          当前延迟: <strong id="detail-llm-latency">-- ms</strong>
+          <span id="detail-llm-avg-latency" class="muted-tag">平均 -- ms</span>
+        </div>
+        <div class="health-sub">
+          本节成功率: <strong id="detail-llm-success-rate">0/0 (100%)</strong>
+        </div>
+      </div>
+
+      <div class="health-card">
+        <div class="health-card-title">☁️ Cloudflare 部署与路由模式</div>
+        <div id="detail-edge-mode" class="health-card-main">正在检测运行环境...</div>
+        <div class="health-sub">支持纯静态直连或 Cloudflare Pages Functions 代理</div>
+      </div>
+
+      <div class="health-card">
+        <div class="health-card-title">🛡️ 课堂防掉线守护</div>
+        <div class="health-card-main">本地防丢缓存: <strong>已开启 (LocalStorage)</strong></div>
+        <div id="detail-wakelock-status" class="health-sub">未开启防息屏（开始同传时自动激活）</div>
+      </div>
+    </div>
+    <div id="detail-last-error" class="health-error-banner hidden"></div>
+  </section>
+
+  <!-- 课堂上下文与主控制栏 -->
+  <section class="classroom-control-bar">
+    <div class="control-primary-actions">
+      <button id="btn-start-stop" class="primary-start-btn">
+        🎙️ 开始课堂同传
+      </button>
+      <button id="btn-demo-lecture" class="secondary-action-btn" title="无需开麦，直接模拟一段大学教授英文讲课并测试 Gemini 2.5 Flash 翻译与术语提取">
+        🎓 模拟教授讲课测试
+      </button>
+      <button id="btn-open-pip" class="secondary-action-btn" title="弹出一个始终置顶在 PPT / Notion 上方的双语悬浮小窗">
+        🪟 弹出置顶悬浮窗
+      </button>
+    </div>
+
+    <div class="course-context-inputs">
+      <div class="field-group">
+        <label for="select-source-lang">授课语言</label>
+        <select id="select-source-lang">
+          <option value="en-US">英语 (美音 en-US)</option>
+          <option value="en-GB">英语 (英音 en-GB)</option>
+          <option value="en-AU">英语 (澳音 en-AU)</option>
+          <option value="ja-JP">日语 (ja-JP)</option>
+          <option value="de-DE">德语 (de-DE)</option>
+          <option value="fr-FR">法语 (fr-FR)</option>
+          <option value="ko-KR">韩语 (ko-KR)</option>
+          <option value="es-ES">西班牙语 (es-ES)</option>
+        </select>
+      </div>
+
+      <div class="field-group">
+        <label for="select-course-subject">课程专业背景 (用于 AI 术语纠错)</label>
+        <select id="select-course-subject">
+          <option value="计算机科学与人工智能 (Computer Science & AI)">💻 计算机与人工智能 (CS / AI)</option>
+          <option value="经济学、金融与商科 (Economics, Finance & Business)">📈 经济学、金融与商科 (Econ / Fin)</option>
+          <option value="电子工程与物理机械 (Electrical & Mechanical Engineering)">⚙️ 工程、物理与数学 (STEM)</option>
+          <option value="生物医学、药学与生命科学 (Biomedicine & Life Sciences)">🧬 生物医学与生命科学 (BioMed)</option>
+          <option value="法学、政治学与社会科学 (Law & Social Sciences)">⚖️ 法学、传媒与社科 (Law / Social)</option>
+          <option value="艺术设计、建筑与人文历史 (Arts, Architecture & Humanities)">🎨 建筑、艺术与人文 (Humanities)</option>
+          <option value="通用大学学术课堂 (General University Lecture)">🏛️ 通用大学学术课堂 (General)</option>
+        </select>
+      </div>
+
+      <div class="field-group glossary-field">
+        <label for="input-glossary">本节课课件专有名词 / 缩写 (可选，逗号分隔)</label>
+        <input
+          id="input-glossary"
+          type="text"
+          placeholder="例如: Backpropagation, Nash Equilibrium, EBITDA, Bellman Equation..."
+        />
+      </div>
+
+      <div class="field-group">
+        <label for="select-translation-model">当前翻译 API</label>
+        <select id="select-translation-model">
+          <option value="gemini-2.5-flash">✨ Gemini 2.5 Flash (方案一推荐)</option>
+          <option value="gemini-2.5-flash-lite">⚡ Gemini 2.5 Flash-Lite (极速轻量)</option>
+          <option value="glm-4-flash">🟢 智谱 GLM-4-Flash (扩展免费API)</option>
+          <option value="siliconflow-qwen">🔵 硅基流动 Qwen2.5-7B (扩展免费API)</option>
+        </select>
+      </div>
+
+      <label class="far-field-toggle" title="关闭浏览器默认会议降噪与回声消除，开启自动增益，避免坐教室后排时老师的声音被浏览器当成背景噪音过滤掉">
+        <input type="checkbox" id="toggle-far-field" checked />
+        <span>📡 教室远场拾音增强</span>
+      </label>
+    </div>
+  </section>
+
+  <!-- 第一轨：0.1秒级实时原声流预览条 -->
+  <section class="live-stream-bar">
+    <div class="live-stream-header">
+      <span id="live-stream-badge" class="stream-badge">待机</span>
+      <span class="stream-hint">第一轨：实时语音识别原声流（教授每讲完一句或超长从句将自动切分送入下方精翻）</span>
+    </div>
+    <div id="live-interim-stream" class="live-interim-box">
+      点击上方【开始课堂同传】或【模拟教授讲课测试】开始实时识别...
+    </div>
+  </section>
+
+  <!-- 主工作区：左侧双语精翻流 + 右侧实时提取学术词汇表 -->
+  <main class="workspace-grid">
+    <!-- 左侧：第二轨 整句学术精翻与笔记流 -->
+    <section class="transcript-panel">
+      <div class="panel-header">
+        <div class="panel-title-group">
+          <h2>📝 课堂实时双语精翻笔记</h2>
+          <span id="transcript-count-badge" class="count-badge">已保存 0 句</span>
+        </div>
+        <div class="panel-actions">
+          <button id="btn-filter-starred" class="panel-btn" title="只显示标记为⭐重点/考点的句子">
+            ⭐ 只看重点
+          </button>
+          <button id="btn-export-md" class="panel-btn primary" title="将双语记录、重点与本节课词汇表一键导出为 Markdown 笔记">
+            📥 导出 Markdown 笔记
+          </button>
+          <button id="btn-clear-notes" class="panel-btn danger" title="清空当前课堂记录">
+            🗑️ 清空
+          </button>
+        </div>
+      </div>
+
+      <!-- 双语卡片滚动列表 -->
+      <div id="transcript-feed" class="transcript-feed"></div>
+
+      <!-- 底部手动补充/粘贴课件句子快速翻译框 -->
+      <form id="manual-input-form" class="manual-input-bar">
+        <input
+          id="manual-sentence-input"
+          type="text"
+          placeholder="💡 也可以直接粘贴课件 PPT 上的英文长难句按回车，结合当前课程背景精翻并提取词汇..."
+        />
+        <button type="submit" class="manual-submit-btn">精翻此句</button>
+      </form>
+    </section>
+
+    <!-- 右侧：本节课 AI 自动提取的双语学术词汇表 & 多 API 架构路线图 -->
+    <aside class="sidebar-panel">
+      <div class="sidebar-box glossary-box">
+        <div class="sidebar-header">
+          <h3>📘 本节课实时提取术语表 <span id="terms-count-badge" class="count-badge">0</span></h3>
+          <button id="btn-clear-terms" class="text-btn">清空</button>
+        </div>
+        <div id="extracted-terms-list" class="glossary-list"></div>
+      </div>
+
+      <div class="sidebar-box roadmap-box">
+        <div class="sidebar-header">
+          <h3>🔌 多 API 引擎状态与扩展槽</h3>
+        </div>
+        <div class="provider-slot-list">
+          <div class="slot-item active">
+            <div class="slot-top">
+              <strong>方案一 (当前激活)</strong>
+              <span class="slot-tag ready">运行中</span>
+            </div>
+            <p>Chrome Web Speech API + Gemini 2.5 Flash 免费层</p>
+          </div>
+          <div class="slot-item">
+            <div class="slot-top">
+              <strong>免费多模型备用通道</strong>
+              <span class="slot-tag ready">已内置</span>
+            </div>
+            <p>支持随时切换至智谱 <code>GLM-4-Flash</code> 或硅基流动 <code>Qwen2.5-7B</code> 免费接口</p>
+          </div>
+          <div class="slot-item">
+            <div class="slot-top">
+              <strong>方案二/三 ASR 扩展槽</strong>
+              <span class="slot-tag planned">可扩展</span>
+            </div>
+            <p>架构已预留 <code>Deepgram Nova-3</code> ($200额度) 与 <code>Azure Speech</code> (.edu学生包) 接入槽位</p>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- API 配置与健康检测弹窗 -->
+  <div id="settings-modal" class="modal-backdrop hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>⚙️ API 密钥与 Cloudflare 路由配置</h3>
+        <button id="btn-close-settings" class="modal-close-btn">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="form-row">
+          <label for="modal-select-provider">选择实时翻译大模型 API</label>
+          <select id="modal-select-provider">
+            <option value="gemini-2.5-flash">Google Gemini 2.5 Flash (方案一首选 · 免费 15 RPM)</option>
+            <option value="gemini-2.5-flash-lite">Google Gemini 2.5 Flash-Lite (极速轻量版)</option>
+            <option value="glm-4-flash">智谱 GLM-4-Flash (完全免费开放接口)</option>
+            <option value="siliconflow-qwen">硅基流动 Qwen2.5-7B-Instruct (永久免费模型)</option>
+          </select>
+          <p id="modal-provider-desc" class="field-hint"></p>
+        </div>
+
+        <div class="form-row">
+          <div class="label-with-link">
+            <label for="modal-input-apikey">API Key (仅保存在你当前浏览器的 LocalStorage 中)</label>
+            <a id="modal-key-help-link" href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">
+              👉 点击前往官方免费获取 Key
+            </a>
+          </div>
+          <input
+            id="modal-input-apikey"
+            type="password"
+            placeholder="AIzaSy..."
+            autocomplete="off"
+          />
+          <p class="field-hint">
+            提示：如果你在 Cloudflare Pages 后台环境变量中配置了 <code>GEMINI_API_KEY</code>，此处可留空直接使用云端密钥。
+          </p>
+        </div>
+
+        <div class="form-row two-col">
+          <div>
+            <label for="modal-select-route">网络请求路由模式</label>
+            <select id="modal-select-route">
+              <option value="auto">智能自动 (优先直连，无前端Key时走CF代理)</option>
+              <option value="direct">浏览器纯前端直连 (延迟最低)</option>
+              <option value="proxy">强制经由 Cloudflare Pages `/api/translate` 转发</option>
+            </select>
+          </div>
+          <div>
+            <label for="modal-input-passcode">服务端访问口令 (可选)</label>
+            <input
+              id="modal-input-passcode"
+              type="password"
+              placeholder="若 CF 配置了 ACCESS_PASSCODE 请填写"
+            />
+          </div>
+        </div>
+
+        <div id="modal-test-feedback" class="modal-feedback"></div>
+      </div>
+
+      <div class="modal-footer">
+        <button id="btn-test-key-modal" class="secondary-action-btn">
+          🩺 测试 API 连通性与延迟
+        </button>
+        <button id="btn-save-settings" class="primary-start-btn compact">
+          💾 保存并应用
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
+
